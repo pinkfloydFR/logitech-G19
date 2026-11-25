@@ -1,0 +1,8 @@
+# Dépendances Windows du HUD Logitech G19
+pyusb>=1.2
+libusb-package>=1.0      # embarque libusb-1.0.dll (aucune installation manuelle de libusb)
+pillow
+psutil
+numpy
+# Optionnel : icône dans la barre système (menu Quitter / Recharger la config)
+pystray

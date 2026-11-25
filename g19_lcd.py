@@ -1,6 +1,6 @@
 """Pilote USB minimal pour l'écran couleur 320x240 et les touches du Logitech G19.
 
-Protocole d'après libg19 (jgeboski) / LCDHost. Fonctionne sous Linux (libusb via pyusb).
+Protocole d'après libg19 (jgeboski) / LCDHost. Linux (libusb système) et Windows (WinUSB + libusb-package, voir windows/).
 Périphérique : 046d:c229 ("G19 Gaming Keyboard Macro Interface" / "Display interface")
   - interface 0 (vendor) : EP 0x02 OUT bulk  -> trames LCD (512 o d'en-tête + 320*240*2 o RGB565)
                            EP 0x81 IN  intr  -> 2 octets, touches LCD (Home/Cancel/Menu/OK/Droite/Gauche/Bas/Haut)
@@ -9,11 +9,24 @@ Périphérique : 046d:c229 ("G19 Gaming Keyboard Macro Interface" / "Display int
 """
 from __future__ import annotations
 
+import os
+import sys
 import threading
 from typing import Optional
 
 import usb.core
 import usb.util
+
+try:  # Windows : libusb-package embarque libusb-1.0.dll (pip install libusb-package)
+    import libusb_package
+    _BACKEND = libusb_package.get_libusb1_backend()
+except Exception:
+    _BACKEND = None  # Linux/macOS : backend libusb système
+
+
+def _find():
+    return usb.core.find(idVendor=VID, idProduct=PID_LCD, backend=_BACKEND)
+
 
 VID = 0x046D
 PID_LCD = 0xC229
@@ -66,10 +79,17 @@ class G19Device:
 
     @staticmethod
     def present() -> bool:
-        return usb.core.find(idVendor=VID, idProduct=PID_LCD) is not None
+        return _find() is not None
 
     def open(self) -> None:
-        dev = usb.core.find(idVendor=VID, idProduct=PID_LCD)
+        # Windows : tant que WinUSB n'est pas installé sur l'INTERFACE 1 (Zadig, 046D C229 01), lire EP 0x83
+        # échoue en I/O error et INVALIDE le handle (« Entity not found » ensuite, même pour l'écran).
+        # Les touches G/M ne sont donc activées sous Windows que si G19_GKEYS=1 (après l'install Zadig n°2).
+        want = sys.platform != "win32" or os.environ.get("G19_GKEYS") == "1"
+        self._open_once(want_gkeys=want)
+
+    def _open_once(self, want_gkeys: bool) -> None:
+        dev = _find()
         if dev is None:
             raise usb.core.USBError("G19 (046d:c229) introuvable")
         try:
@@ -84,11 +104,12 @@ class G19Device:
                 pass
         usb.util.claim_interface(dev, 0)
         self.has_gkeys = False
-        try:
-            usb.util.claim_interface(dev, 1)  # interface HID : touches G / M
-            self.has_gkeys = True
-        except usb.core.USBError:
-            pass
+        if want_gkeys:
+            try:
+                usb.util.claim_interface(dev, 1)  # interface HID : touches G / M
+                self.has_gkeys = True
+            except usb.core.USBError:
+                pass
         self.dev = dev
 
     def close(self) -> None:
@@ -111,6 +132,8 @@ class G19Device:
         if len(rgb565) != FRAME_BYTES:
             raise ValueError(f"trame de {len(rgb565)} octets au lieu de {FRAME_BYTES}")
         with self._lock:
+            if self.dev is None:
+                raise usb.core.USBError("périphérique fermé")
             self.dev.write(0x02, _HEADER + rgb565, timeout=1000)
 
     def read_lkeys(self, timeout_ms: int = 30) -> Optional[bytes]:
@@ -132,11 +155,19 @@ class G19Device:
             r = bytes(self.dev.read(0x83, 8, timeout=timeout_ms))
         except usb.core.USBTimeoutError:
             return None
+        except usb.core.USBError:
+            # Windows : l interface 1 reste sous le pilote HID tant que WinUSB n y est pas installé (Zadig).
+            # Les touches G/M sont alors désactivées, l écran et les touches LCD continuent de marcher.
+            self.has_gkeys = False
+            return None
         if len(r) < 3 or r[0] != 0x02:
             return None
         return r[1] | (r[2] << 8)
 
     def _set_report(self, report_id: int, payload: bytes) -> None:
+        if not self.has_gkeys:
+            # Ces SET_REPORT visent l'interface 1 : sous Windows sans WinUSB dessus, ils INVALIDENT le handle.
+            return
         with self._lock:
             self.dev.ctrl_transfer(0x21, 0x09, 0x0300 | report_id, 1, bytes([report_id]) + payload, timeout=500)
 

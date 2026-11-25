@@ -59,7 +59,14 @@ Périphérique **`046d:c229`** (« Display interface » / « Macro Interface »)
 ## Organisation du dépôt (un seul dépôt, cœur commun)
 - Racine : cœur commun (`g15_dashboard.py`, `g19_lcd.py`, `g19_hud.py`) — à corriger une seule fois pour les deux OS.
 - `linux/` : installation Debian/Ubuntu/Proxmox (`install.sh`, `uninstall.sh`, `g19-hud.service`, `99-g19-hud.rules`).
-- `windows/` : à faire (pilote WinUSB via Zadig sur `046d:c229`, `libusb-package`, icône tray, `.exe` PyInstaller, écran Média WinRT en couleur native).
+- `windows/` : `run.ps1`, `requirements.txt`, `README.md` — testé sur G19 réel (voir section Windows). Reste : `.exe` PyInstaller, démarrage auto, écran Média WinRT en couleur native.
+
+## Windows (testé sur G19 réel, Windows 11, Python 3.14)
+- Pilote **WinUSB** (Zadig, lancé en admin) sur l'interface **0** de `046D C229` (⚠️ jamais `C228` = le clavier). Sans pilote, `usb.core.find` voit le périphérique mais `open()` lève `NotImplementedError`.
+- `libusb-package` fournit `libusb-1.0.dll` (`g19_lcd._BACKEND`). Si l'appareil est « Shared » dans usbipd, faire `usbipd detach` + `unbind` avant (sinon `Access denied`).
+- **Piège majeur** : toucher l'**interface 1** (lecture EP 0x83, `SET_REPORT` avec `wIndex=1`) tant qu'elle est sous le pilote HID Windows → `USBError 2 Entity not found` sur TOUT le handle, écran compris. Donc sous Windows `has_gkeys=False` par défaut : pas de touches G/M, pas de couleur de rétroéclairage ni de LED M, sauf `G19_GKEYS=1` après une 2ᵉ install Zadig sur `046D C229 01` (non testé). La luminosité (`wIndex=0`) et les touches LCD (EP 0x81) marchent sans cela.
+- Arrêt propre : SIGINT/SIGTERM/SIGBREAK + `G19_MAX_SECONDS=N` (tests) ; avec l'icône tray, un thread surveille `app.running` pour fermer le tray puis `worker.join(8)` laisse finir la trame USB et l'écran noir final. Ne jamais `Stop-Process -Force` pendant un envoi (écran figé → rebrancher).
+- À l'arrêt, le HUD natif envoie un écran **noir** (l'ambre = bug : c'était l'image vide du mode retro).
 
 ## Installation Linux / Proxmox (testée dans WSL2 Ubuntu 24.04 avec systemd, sur G19 réel)
 `sudo ./linux/install.sh [--user NOM|root] [--prefix DIR] [--no-apt] [--no-start]` puis `journalctl -u g19-hud -f`.

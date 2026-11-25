@@ -2938,10 +2938,14 @@ class G19Controller:
                 if gm is not None:
                     self._handle_gkeys(gm)
                 pkt = self.dev.read_lkeys(30)
-            except usb.core.USBError:
+            except usb.core.USBError as e:
+                if self._debug:
+                    print(f"[G19] erreur lecture touches : {e!r}")
                 self._mark_disconnected()
                 continue
-            except Exception:
+            except Exception as e:
+                if self._debug:
+                    print(f"[G19] exception lecture touches : {e!r}")
                 time.sleep(0.05)
                 continue
             if pkt:
@@ -3021,7 +3025,9 @@ class G19Controller:
             return
         try:
             self.dev.send_frame(self._encode_frame(img))
-        except (usb.core.USBError, OSError, ValueError):
+        except (usb.core.USBError, OSError, ValueError) as e:
+            if self._debug:
+                print(f"[G19] erreur envoi trame : {e!r}")
             self._mark_disconnected()
 
     def poll_events(self) -> list:
@@ -3035,7 +3041,10 @@ class G19Controller:
         time.sleep(0.06)
         if self.connected:
             try:
-                self.send_image(Image.new("1", (LCD_W, LCD_H), 1))
+                if self.native:
+                    self.send_image(Image.new("RGB", (320, 240), (0, 0, 0)))  # écran noir à l'arrêt
+                else:
+                    self.send_image(Image.new("1", (LCD_W, LCD_H), 1))
                 self.dev.set_mkeys()
             except Exception:
                 pass
@@ -3200,6 +3209,7 @@ class G15App:
 
     def stop(self, icon=None, item=None):
         self.running = False
+        icon = icon or getattr(self, "tray_icon", None)  # arrêt par signal / minuteur : fermer aussi le tray
         if icon:
             icon.stop()
 
@@ -3215,25 +3225,45 @@ def create_tray_icon(app: G15App):
         pystray.MenuItem("Recalibrer les boutons", lambda icon, item: app.hw.start_calibration()),
         pystray.MenuItem("Quitter G15 HUD", app.stop),
     )
-    return pystray.Icon("g15_hud", ico, "G15-Retro-HUD v0.2.0", menu)
+    icon = pystray.Icon("g15_hud", ico, "G15-Retro-HUD v0.2.0", menu)
+    app.tray_icon = icon
+    return icon
 
 
 if __name__ == "__main__":
     app = G15App()
-    if not IS_WIN:
-        # Arrêt propre (systemd / Ctrl+C) : on laisse finir la trame USB en cours.
-        # Couper une trame G19 en plein envoi laisse l'écran figé jusqu'au rebranchement.
-        import signal
-        signal.signal(signal.SIGINT, lambda *_: app.stop())
-        signal.signal(signal.SIGTERM, lambda *_: app.stop())
+    # Arrêt propre (systemd / Ctrl+C / Ctrl+Break) : on laisse finir la trame USB en cours.
+    # Couper une trame G19 en plein envoi laisse l'écran figé jusqu'au rebranchement.
+    import signal
+    for _sig in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        if hasattr(signal, _sig):
+            try:
+                signal.signal(getattr(signal, _sig), lambda *_: app.stop())
+            except (ValueError, OSError):
+                pass
+    _max_s = float(os.environ.get("G19_MAX_SECONDS", "0") or 0)  # tests : arrêt automatique propre
+    if _max_s > 0:
+        threading.Timer(_max_s, app.stop).start()
     if HAS_TRAY:
         worker = threading.Thread(target=app.run_loop, daemon=True)
         worker.start()
         tray = create_tray_icon(app)
+
+        def _watch_stop():  # signal / minuteur / « Quitter » : refermer l'icône quand la boucle doit s'arrêter
+            while app.running:
+                time.sleep(0.2)
+            try:
+                tray.stop()
+            except Exception:
+                pass
+
+        threading.Thread(target=_watch_stop, daemon=True).start()
         try:
             tray.run()
         except KeyboardInterrupt:
             app.stop(tray)
+        app.running = False
+        worker.join(timeout=8)  # laisser finir la trame USB en cours + l'écran noir final (sinon écran figé)
     else:
         try:
             app.run_loop()
