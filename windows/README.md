@@ -4,7 +4,8 @@ Même cœur que la version Linux (`g19_lcd.py`, `g19_hud.py`, `g19_dashboard.py`
 
 ## Installation (une seule fois)
 
-1. **Pilote WinUSB sur l'interface 0 de l'écran** avec [Zadig](https://zadig.akeo.ie/) (lancé en administrateur) :
+1. **Pilote WinUSB sur l'interface 0 de l'écran** avec [Zadig](https://zadig.akeo.ie/) (lancé en administrateur ; une copie
+   vérifiable est fournie dans [`tools/`](tools/README.md)) :
    - `Options → List All Devices`
    - choisir **« G19 Gaming Keyboard (Display interface) (Interface 0) »** et vérifier l'**USB ID `046D C229 00`**
      (⚠️ jamais `C228` : c'est le clavier lui-même)

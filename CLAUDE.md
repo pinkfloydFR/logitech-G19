@@ -86,3 +86,7 @@ Périphérique **`046d:c229`** (« Display interface » / « Macro Interface »)
 
 ## Référence
 Protocole d'après libg19 (jgeboski), LCDHost, endlessmind/G19LCD ; valeurs d'orientation, touches G/M et soleil mesurées sur le G19 de l'utilisateur.
+
+## Dépôt GitHub
+https://github.com/pinkfloydFR/logitech-G19 (public, branche `main`). Origine : https://github.com/DPKoss/G15-Retro-HUD (remote `upstream` en local).
+`windows/tools/` contient une copie de Zadig 2.9 (GPLv3, SHA-256 dans son README) — `.exe` ajouté avec `git add -f` car `*.exe` est dans `.gitignore`.
