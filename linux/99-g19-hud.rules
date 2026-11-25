@@ -1,0 +1,3 @@
+# Logitech G19 (interface écran/touches G-M) : accès sans root pour le groupe plugdev
+# + démarrage automatique du service au branchement.
+SUBSYSTEM=="usb", ATTR{idVendor}=="046d", ATTR{idProduct}=="c229", MODE="0660", GROUP="plugdev", TAG+="systemd", ENV{SYSTEMD_WANTS}="g19-hud.service"

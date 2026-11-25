@@ -1,3 +1,16 @@
+# Logitech G19 HUD (fork de G15-Retro-HUD)
+
+Tableau de bord pour l'écran couleur **320x240** et les touches du **Logitech G19**, sans pilote Logitech : USB direct (pyusb/libusb).
+Fork de [DPKoss/G15-Retro-HUD](https://github.com/DPKoss/G15-Retro-HUD) (MIT) — le cœur et les écrans viennent du projet d'origine, ce fork ajoute le support G19.
+
+- **Linux / Proxmox : prêt** (testé sur un G19 réel via WSL2 + systemd) → `sudo ./linux/install.sh`, voir [`linux/`](linux/) et [`CLAUDE.md`](CLAUDE.md).
+- **Windows : en préparation** (pilote WinUSB, tray, `.exe`) → voir [`windows/`](windows/).
+- Interface couleur native (7 écrans), touches LCD, G1–G12, M1–M3/MR, luminosité : détails du protocole dans [`CLAUDE.md`](CLAUDE.md).
+
+Le reste de ce README est celui du projet G15 d'origine (Windows, LCD 160x43).
+
+---
+
 # G15-Retro-HUD
 
 > **English** | **[Documentation en français](README.fr.md)**

@@ -11,6 +11,7 @@ import math
 import os
 import queue
 import random
+import re
 import socket
 import subprocess
 import sys
@@ -24,9 +25,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import hid
 import psutil
 from PIL import Image, ImageDraw, ImageFont
+
+IS_WIN = sys.platform == "win32"
+
+# hidapi : requis uniquement pour le backend G15 (USB HID). Absent = backend G19/libusb seul.
+try:
+    import hid
+    HAS_HID = True
+except Exception:
+    hid = None
+    HAS_HID = False
+
+# pyusb/libusb : requis pour le backend Logitech G19 (écran couleur 320x240)
+try:
+    import g19_lcd
+    HAS_G19 = True
+except Exception:
+    g19_lcd = None
+    HAS_G19 = False
 
 # ==============================================================================
 # DÉPENDANCES OPTIONNELLES (DÉGRADATION GRACIEUSE)
@@ -232,9 +250,19 @@ class ConfigManager:
 # POLICES BITMAP STRICTES (SANS ANTIALIASING) & PRIMITIVES 1-BIT
 # ==============================================================================
 def _find_win_font(candidates: tuple[str, ...], size: int, fallback):
-    fonts_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+    if IS_WIN:
+        font_dirs = [Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"]
+    else:
+        font_dirs = [
+            Path("/usr/share/fonts/truetype/dejavu"),
+            Path("/usr/share/fonts/truetype/liberation"),
+            Path("/usr/share/fonts/truetype/liberation2"),
+            Path("/usr/share/fonts/dejavu"),
+            Path("/usr/share/fonts/TTF"),
+            Path.home() / ".fonts",
+        ]
     for name in candidates:
-        for target in (fonts_dir / name, Path(name)):
+        for target in [d / name for d in font_dirs] + [Path(name)]:
             try:
                 return ImageFont.truetype(str(target), size)
             except OSError:
@@ -244,11 +272,12 @@ def _find_win_font(candidates: tuple[str, ...], size: int, fallback):
 
 def load_fonts():
     f_default = ImageFont.load_default()
-    # Tahoma 9px en fontmode="1" possède un hinting bitmap natif Microsoft ultra-net avec accents
-    f_tiny = _find_win_font(("tahoma.ttf", "consola.ttf", "segoeui.ttf"), 9, f_default)
-    f_med = _find_win_font(("consolab.ttf", "tahomabd.ttf", "tahoma.ttf"), 11, f_tiny)
-    f_big = _find_win_font(("consolab.ttf", "consola.ttf", "tahomabd.ttf"), 20, f_med)
-    f_huge = _find_win_font(("consolab.ttf", "consola.ttf", "tahomabd.ttf"), 25, f_big)
+    # Tahoma 9px en fontmode="1" possède un hinting bitmap natif Microsoft ultra-net avec accents.
+    # Sous Linux : DejaVu Sans / Mono (paquet fonts-dejavu-core, présent sur Debian/Proxmox).
+    f_tiny = _find_win_font(("tahoma.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf", "consola.ttf", "segoeui.ttf"), 9, f_default)
+    f_med = _find_win_font(("consolab.ttf", "tahomabd.ttf", "DejaVuSansMono-Bold.ttf", "tahoma.ttf"), 11, f_tiny)
+    f_big = _find_win_font(("consolab.ttf", "consola.ttf", "DejaVuSansMono-Bold.ttf", "tahomabd.ttf"), 20, f_med)
+    f_huge = _find_win_font(("consolab.ttf", "consola.ttf", "DejaVuSansMono-Bold.ttf", "tahomabd.ttf"), 25, f_big)
     return f_tiny, f_med, f_big, f_huge
 
 
@@ -552,14 +581,19 @@ class NvmlProbe:
         self._init_nvml()
 
     def _init_nvml(self):
-        dll_paths = (
-            "nvml.dll",
-            r"C:\Windows\System32\nvml.dll",
-            r"C:\Program Files\NVIDIA Corporation\NVSMI\nvml.dll",
-        )
+        if IS_WIN:
+            dll_paths = (
+                "nvml.dll",
+                r"C:\Windows\System32\nvml.dll",
+                r"C:\Program Files\NVIDIA Corporation\NVSMI\nvml.dll",
+            )
+            loader = lambda p: ctypes.WinDLL(p)  # noqa: E731
+        else:
+            dll_paths = ("libnvidia-ml.so.1", "libnvidia-ml.so")
+            loader = lambda p: ctypes.CDLL(p)  # noqa: E731
         for p in dll_paths:
             try:
-                lib = ctypes.WinDLL(p)
+                lib = loader(p)
                 if lib.nvmlInit_v2() == 0:
                     if lib.nvmlDeviceGetHandleByIndex_v2(ctypes.c_uint(0), ctypes.byref(self._handle)) == 0:
                         self._lib = lib
@@ -606,18 +640,32 @@ VIRTUAL_NIC_KEYWORDS = (
     "nordlynx", "warp", "cloudflare", "zerotier", "anyconnect", "cisco",
     "forti", "pangp", "wsl", "vethernet", "hyper-v", "vmware", "virtualbox",
     "vbox", "loopback", "bluetooth", "npcap", "teredo", "isatap", "docker",
+    # Linux / Proxmox : veth, ponts invités (fwbr/fwpr/fwln), taps de VM (tapNNNi0), libvirt
+    "veth", "virbr", "fwbr", "fwpr", "fwln", "br-",
 )
 
 VPN_TUNNEL_KEYWORDS = (
     "wireguard", "proton", "wintun", "openvpn", "nordlynx", "warp",
-    "anyconnect", "forti", "pangp", "tap-windows", "tun",
+    "anyconnect", "forti", "pangp", "tap-windows", "tun", "wg", "tailscale",
 )
 
-WIFI_NIC_KEYWORDS = ("wi-fi", "wifi", "wlan", "wireless", "sans fil", "802.11")
+WIFI_NIC_KEYWORDS = ("wi-fi", "wifi", "wlan", "wlp", "wireless", "sans fil", "802.11")
 
 
 def _get_best_route_ifname() -> Optional[str]:
-    """Retourne le nom Windows de l'interface portant la route vers 8.8.8.8 via iphlpapi."""
+    """Retourne le nom de l'interface portant la route par défaut (iphlpapi sous Windows, /proc/net/route sous Linux)."""
+    if not IS_WIN:
+        try:
+            best, best_metric = None, None
+            for line in Path("/proc/net/route").read_text().splitlines()[1:]:
+                f = line.split()
+                if len(f) >= 7 and f[1] == "00000000" and int(f[3], 16) & 0x2:  # route par défaut, UP
+                    metric = int(f[6])
+                    if best_metric is None or metric < best_metric:
+                        best, best_metric = f[0], metric
+            return best
+        except Exception:
+            return None
     try:
         best_idx = ctypes.c_ulong(0)
         # 0x08080808 = 8.8.8.8 en network byte order
@@ -933,8 +981,10 @@ class TelemetryHub:
 
         if self.nvml.available:
             print("[INIT] Sonde GPU NVIDIA NVML native active (zéro processus PowerShell).")
-        else:
+        elif IS_WIN:
             print("[INIT] NVML absent -> bascule sur compteurs WMI iGPU Windows.")
+        else:
+            print("[INIT] Pas de GPU NVIDIA (libnvidia-ml absente) -> jauge GPU inactive.")
 
         # Réseau (carte physique uniquement : Wi-Fi prioritaire puis Ethernet)
         self.phys_nic_name: Optional[str] = None
@@ -984,7 +1034,7 @@ class TelemetryHub:
 
         # Démarrage des workers
         threading.Thread(target=self._fast_sensor_loop, daemon=True).start()
-        if not self.nvml.available:
+        if not self.nvml.available and IS_WIN:
             threading.Thread(target=self._igpu_wmi_loop, daemon=True).start()
         threading.Thread(target=self._ping_loop, daemon=True).start()
         threading.Thread(target=self._weather_and_wan_loop, daemon=True).start()
@@ -1122,6 +1172,18 @@ class TelemetryHub:
     # --- Boucle Pings ICMP des 3 serveurs ---
     @staticmethod
     def _ping_once(host: str) -> Optional[int]:
+        if not IS_WIN:
+            try:
+                out = subprocess.check_output(
+                    ["ping", "-c", "1", "-W", "1", host],
+                    stderr=subprocess.DEVNULL, text=True, errors="ignore", timeout=3,
+                )
+                m = re.search(r"time[=<]\s*([\d.]+)\s*ms", out)
+                if m:
+                    return max(1, int(round(float(m.group(1)))))
+            except Exception:
+                pass
+            return None
         try:
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -2750,25 +2812,282 @@ class G15HidController:
 
 
 # ==============================================================================
+# CONTRÔLEUR LOGITECH G19 (LIBUSB / PYUSB, ÉCRAN COULEUR 320x240, MÊME INTERFACE QUE LE G15)
+# ==============================================================================
+# Thèmes (couleur fond "LCD éteint", couleur pixel "allumé") ; le rendu 160x43 reste inchangé.
+G19_THEMES = {
+    "amber": ((235, 150, 0), (28, 14, 0), (255, 140, 0)),     # look G15 v2 d'origine
+    "blue": ((70, 120, 255), (0, 8, 40), (40, 90, 255)),      # look G15 v1
+    "green": ((120, 220, 40), (6, 26, 0), (60, 255, 0)),
+    "white": ((235, 235, 235), (10, 10, 10), (255, 255, 255)),
+    "amber-dark": ((8, 5, 0), (255, 170, 0), (255, 140, 0)),  # fond noir, pixels ambre
+    "matrix": ((0, 8, 0), (60, 255, 80), (0, 255, 0)),
+}
+
+# Touches LCD du G19 -> boutons logiques du HUD (modifiable via g19_keymap.json : {"UP":"1",...})
+G19_DEFAULT_KEYMAP = {
+    "MENU": BTN_APPLET, "OK": BTN_APPLET,
+    "UP": BTN_1, "DOWN": BTN_2, "LEFT": BTN_3, "RIGHT": BTN_4,
+    "CANCEL": "PREV_PAGE",     # touche retour : écran précédent
+    "HOME": "TOGGLE_BLANK",    # touche carrée : éteint / rallume l'écran
+}
+
+
+class G19Controller:
+    """Remplace G15HidController : mêmes attributs/méthodes publics, rendu 160x43 -> 320x240 RGB565."""
+
+    def __init__(self, cfg_mgr: ConfigManager):
+        self.cfg_mgr = cfg_mgr
+        self.running = True
+        self._io_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self.dev = g19_lcd.G19Device()
+        self.connected = False
+        self._last_reconnect_t = 0.0
+        self._debug = os.environ.get("G19_DEBUG", "") not in ("", "0")
+
+        self.event_queue = queue.Queue()
+        self.screen_blanked = False
+        self.calibrating = False  # pas de calibration : les 8 touches LCD du G19 ont des bits fixes
+        self.pressed_set: set[int] = set()
+        self.applet_press_time: Optional[float] = None
+        self.applet_long_handled = False
+
+        theme = os.environ.get("G19_THEME", "amber").lower()
+        self.bg, self.fg, self.backlight = G19_THEMES.get(theme, G19_THEMES["amber"])
+        self.layout = os.environ.get("G19_LAYOUT", "2x").lower()  # "2x" (pixels carrés) | "stretch" (2x5)
+        # G19_UI=native (défaut) : interface couleur 320x240 ; G19_UI=retro : rendu G15 160x43 agrandi
+        self.native = os.environ.get("G19_UI", "native").lower() != "retro"
+        self._bits = self._load_keymap()
+
+        self._try_connect(initial=True)
+        threading.Thread(target=self._reader_loop, daemon=True).start()
+
+    # --- Touches ---------------------------------------------------------------
+    def _load_keymap(self) -> dict[int, int]:
+        names = {
+            "HOME": g19_lcd.LKEY_HOME, "CANCEL": g19_lcd.LKEY_CANCEL, "MENU": g19_lcd.LKEY_MENU,
+            "OK": g19_lcd.LKEY_OK, "RIGHT": g19_lcd.LKEY_RIGHT, "LEFT": g19_lcd.LKEY_LEFT,
+            "DOWN": g19_lcd.LKEY_DOWN, "UP": g19_lcd.LKEY_UP,
+        }
+        mapping = dict(G19_DEFAULT_KEYMAP)
+        f = BASE_DIR / "g19_keymap.json"
+        if f.exists():
+            try:
+                mapping = {
+                    k.upper(): (int(v) if str(v).lstrip("-").isdigit() else str(v))
+                    for k, v in json.loads(f.read_text(encoding="utf-8")).items()
+                }
+            except Exception as e:
+                print(f"[G19] g19_keymap.json illisible ({e}) -> mapping par défaut")
+        return {names[k]: v for k, v in mapping.items() if k in names}
+
+    def is_button_held(self, btn_id: int) -> bool:
+        with self._state_lock:
+            return btn_id in self.pressed_set
+
+    def start_calibration(self):
+        print("[G19] Pas de calibration nécessaire (adapter g19_keymap.json pour remapper les touches).")
+
+    def render_calibration(self, draw):
+        pass
+
+    def _handle_report(self, pkt: bytes):
+        bits = pkt[0] | (pkt[1] << 8 if len(pkt) > 1 else 0)
+        now_pressed = {btn for mask, btn in self._bits.items() if bits & mask}
+        with self._state_lock:
+            for ev in sorted(e for e in now_pressed - self.pressed_set if isinstance(e, str)):
+                self.event_queue.put(ev)  # actions directes (PREV_PAGE, TOGGLE_BLANK...)
+            now_pressed = {b for b in now_pressed if isinstance(b, int)}
+            newly_pressed = now_pressed - self.pressed_set
+            newly_released = self.pressed_set - now_pressed
+            for b in (BTN_1, BTN_2, BTN_3, BTN_4):
+                if b in newly_pressed:
+                    self.event_queue.put(b)
+            if BTN_APPLET in newly_pressed:
+                self.applet_press_time = time.monotonic()
+                self.applet_long_handled = False
+            if BTN_APPLET in newly_released and self.applet_press_time is not None:
+                if not self.applet_long_handled:
+                    self.event_queue.put("NEXT_PAGE")
+                self.applet_press_time = None
+            self.pressed_set = now_pressed
+
+    # Touches G1..G12 -> saut direct à l'écran n ; M1 = précédent, M2 = suivant, MR = écran on/off
+    def _handle_gkeys(self, mask: int):
+        newly = mask & ~getattr(self, "_gm_prev", 0)
+        self._gm_prev = mask
+        for i in range(12):
+            if newly & (1 << i):
+                self.event_queue.put(f"GOTO:{i}")
+        if newly & (1 << 12):
+            self.event_queue.put("PREV_PAGE")
+        if newly & (1 << 13):
+            self.event_queue.put("NEXT_PAGE")
+        if newly & (1 << 15):
+            self.event_queue.put("TOGGLE_BLANK")
+
+    def _reader_loop(self):
+        import usb.core
+        while self.running:
+            if not self.connected:
+                time.sleep(0.05)
+                continue
+            try:
+                gm = self.dev.read_gkeys(20)
+                if gm is not None:
+                    self._handle_gkeys(gm)
+                pkt = self.dev.read_lkeys(30)
+            except usb.core.USBError:
+                self._mark_disconnected()
+                continue
+            except Exception:
+                time.sleep(0.05)
+                continue
+            if pkt:
+                if self._debug:
+                    print(f"[G19 RX] {pkt.hex(' ')}")
+                self._handle_report(pkt)
+            with self._state_lock:
+                if self.applet_press_time is not None and not self.applet_long_handled:
+                    if time.monotonic() - self.applet_press_time > 0.9:
+                        self.applet_long_handled = True
+                        self.event_queue.put("TOGGLE_BLANK")
+
+    # --- Connexion -------------------------------------------------------------
+    def _try_connect(self, initial: bool = False) -> bool:
+        import usb.core
+        with self._io_lock:
+            self.dev.close()
+            try:
+                self.dev.open()
+                self.dev.set_backlight(*self.backlight)
+                self.dev.set_brightness(int(os.environ.get("G19_BRIGHTNESS", "100")))
+                self.dev.set_mkeys(m1=True)
+                self.connected = True
+                print("[G19] Logitech G19 connecté et opérationnel.")
+                return True
+            except (usb.core.USBError, OSError, ValueError) as e:
+                if initial:
+                    print(f"[G19] Aucun G19 utilisable ({e}) — attente de connexion USB (hot-plug 2s)...")
+                self.connected = False
+                self.dev.close()
+                return False
+
+    def _mark_disconnected(self):
+        if self.connected:
+            print("[G19] Déconnexion USB détectée — reconnexion auto toutes les 2s...")
+        self.connected = False
+        with self._io_lock:
+            self.dev.close()
+        with self._state_lock:
+            self.pressed_set.clear()
+            self.applet_press_time = None
+
+    # --- Rendu -----------------------------------------------------------------
+    def _encode_frame(self, img: Image.Image) -> bytes:
+        W, H = g19_lcd.LCD_W, g19_lcd.LCD_H
+        if img.mode == "RGB" and img.size == (W, H):
+            return self._finish_frame(img)  # interface native couleur : aucun traitement 1-bit
+        lit = img.convert("L").point(lambda v: 255 if v < 128 else 0)  # 255 = pixel allumé (noir sur G15)
+        if self.layout == "stretch":
+            lit = lit.resize((W, 5 * LCD_H), Image.NEAREST)
+        else:
+            lit = lit.resize((2 * LCD_W, 2 * LCD_H), Image.NEAREST)
+        canvas_mask = Image.new("L", (W, H), 0)
+        canvas_mask.paste(lit, ((W - lit.width) // 2, (H - lit.height) // 2))
+        frame = Image.composite(
+            Image.new("RGB", (W, H), self.fg), Image.new("RGB", (W, H), self.bg), canvas_mask
+        )
+        return self._finish_frame(frame)
+
+    def _finish_frame(self, frame: Image.Image) -> bytes:
+        dump = os.environ.get("G19_DUMP")  # debug : sauvegarde la dernière trame (PNG) sans matériel
+        if dump and time.monotonic() - getattr(self, "_last_dump", 0) > 1.0:
+            self._last_dump = time.monotonic()
+            frame.save(dump)
+        # La mémoire du G19 est en 240 colonnes x 320 lignes (écran monté en portrait) :
+        # miroir horizontal + rotation (validé à l'écran sur un G19 réel)
+        frame = frame.transpose(Image.FLIP_LEFT_RIGHT).rotate(int(os.environ.get("G19_ROT", "90")), expand=True)
+        return g19_lcd.rgb_to_rgb565_le(frame.tobytes())
+
+    def send_image(self, img: Image.Image):
+        import usb.core
+        if not self.connected:
+            now = time.monotonic()
+            if now - self._last_reconnect_t >= 2.0:
+                self._last_reconnect_t = now
+                self._try_connect(initial=False)
+            return
+        try:
+            self.dev.send_frame(self._encode_frame(img))
+        except (usb.core.USBError, OSError, ValueError):
+            self._mark_disconnected()
+
+    def poll_events(self) -> list:
+        evs = []
+        while not self.event_queue.empty():
+            evs.append(self.event_queue.get_nowait())
+        return evs
+
+    def close(self):
+        self.running = False
+        time.sleep(0.06)
+        if self.connected:
+            try:
+                self.send_image(Image.new("1", (LCD_W, LCD_H), 1))
+                self.dev.set_mkeys()
+            except Exception:
+                pass
+        with self._io_lock:
+            self.dev.close()
+
+
+def create_hw(cfg_mgr: ConfigManager):
+    """Choisit le backend : G15_BACKEND=g15|g19|auto (auto = G19 si branché, sinon G15)."""
+    want = os.environ.get("G15_BACKEND", "auto").lower()
+    if want == "g19" or (want == "auto" and HAS_G19 and (not HAS_HID or _g19_present())):
+        if not HAS_G19:
+            sys.exit("Backend G19 demandé mais pyusb/libusb est indisponible (pip install pyusb).")
+        return G19Controller(cfg_mgr)
+    if not HAS_HID:
+        sys.exit("Aucun backend USB : installer 'hidapi' (G15) ou 'pyusb' (G19).")
+    return G15HidController(cfg_mgr)
+
+
+def _g19_present() -> bool:
+    try:
+        return g19_lcd.G19Device.present()
+    except Exception:
+        return False
+
+
+# ==============================================================================
 # APPLICATION PRINCIPALE (8 ÉCRANS, MASQUAGE AUTO 3s & SYSTEM TRAY)
 # ==============================================================================
 class G15App:
     def __init__(self):
         self.cfg_mgr = ConfigManager(CONFIG_FILE)
-        self.hw = G15HidController(self.cfg_mgr)
+        self.hw = create_hw(self.cfg_mgr)
         self.telemetry = TelemetryHub(self.cfg_mgr)
         self.audio = AudioLoopbackWorker()
 
-        self.screens: list[tuple[str, BaseScreen]] = [
-            ("HORLOGE", ClockScreen()),
-            ("CHRONO", ChronoScreen()),
-            ("MONITORING", MonitorScreen()),
-            ("MÉDIA", MediaScreen()),
-            ("RÉSEAU", NetworkScreen()),
-            ("SERVEURS", ServersScreen()),
-            ("MÉTÉO", WeatherScreen()),
-            ("DEMOSCENE", DemosceneScreen()),
-        ]
+        self.native = bool(getattr(self.hw, "native", False))
+        if self.native:
+            import g19_hud
+            self.g19_hud = g19_hud
+            self.screens = g19_hud.make_screens(sys.modules[__name__])
+        else:
+            self.screens: list[tuple[str, BaseScreen]] = [
+                ("HORLOGE", ClockScreen()),
+                ("CHRONO", ChronoScreen()),
+                ("MONITORING", MonitorScreen()),
+                ("MÉDIA", MediaScreen()),
+                ("RÉSEAU", NetworkScreen()),
+                ("SERVEURS", ServersScreen()),
+                ("MÉTÉO", WeatherScreen()),
+                ("DEMOSCENE", DemosceneScreen()),
+            ]
         self.page_idx = 0
         now = time.monotonic()
         self.banner_until = now + 1.2
@@ -2810,6 +3129,16 @@ class G15App:
                 elif ev == "NEXT_PAGE":
                     self.next_page()
                     page_name, screen = self.screens[self.page_idx]
+                elif isinstance(ev, str) and ev.startswith("GOTO:"):
+                    n = int(ev[5:])
+                    if 0 <= n < len(self.screens) and n != self.page_idx:
+                        self.page_idx = (n - 1) % len(self.screens)
+                        self.next_page()
+                        page_name, screen = self.screens[self.page_idx]
+                elif ev == "PREV_PAGE":
+                    self.page_idx = (self.page_idx - 2) % len(self.screens)
+                    self.next_page()
+                    page_name, screen = self.screens[self.page_idx]
                 elif isinstance(ev, int):
                     was_immersive = screen.is_immersive()
                     softkeys_currently_shown = (not was_immersive) or (now < self.softkeys_awake_until)
@@ -2825,6 +3154,22 @@ class G15App:
                         screen.on_button(ev)
                         if screen.is_immersive():
                             self.softkeys_awake_until = now + cfg.softkey_hide_sec
+
+            if self.native:
+                img = Image.new("RGB", (320, 240), (0, 0, 0))
+                if not self.hw.screen_blanked:
+                    draw = ImageDraw.Draw(img)
+                    now = time.monotonic()
+                    screen.render(draw, self.telemetry, self.audio, self.hw, cfg, True)
+                    if now < self.banner_until:
+                        self.g19_hud.toast(draw, f"{self.page_idx + 1}/{len(self.screens)}  {page_name}")
+                    elif now < self.toast_until:
+                        self.g19_hud.toast(draw, self.toast_msg)
+                self.hw.send_image(img)
+                elapsed = time.monotonic() - t0
+                if elapsed < frame_dt:
+                    time.sleep(frame_dt - elapsed)
+                continue
 
             img = Image.new("1", (LCD_W, LCD_H), 1)
             if not self.hw.screen_blanked:
@@ -2875,6 +3220,12 @@ def create_tray_icon(app: G15App):
 
 if __name__ == "__main__":
     app = G15App()
+    if not IS_WIN:
+        # Arrêt propre (systemd / Ctrl+C) : on laisse finir la trame USB en cours.
+        # Couper une trame G19 en plein envoi laisse l'écran figé jusqu'au rebranchement.
+        import signal
+        signal.signal(signal.SIGINT, lambda *_: app.stop())
+        signal.signal(signal.SIGTERM, lambda *_: app.stop())
     if HAS_TRAY:
         worker = threading.Thread(target=app.run_loop, daemon=True)
         worker.start()
