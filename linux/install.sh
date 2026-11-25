@@ -29,7 +29,7 @@ fi
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname "$HERE")"
 
-for f in g19_dashboard.py g19_lcd.py g19_hud.py g19_proxmox.py; do
+for f in g19_dashboard.py g19_lcd.py g19_hud.py g19_proxmox.py g19_docker.py; do
   [ -f "$REPO/$f" ] || { echo "Fichier manquant : $REPO/$f" >&2; exit 1; }
 done
 
@@ -50,7 +50,7 @@ fi
 
 echo "==> Fichiers dans $PREFIX"
 install -d -m 755 "$PREFIX"
-for f in g19_dashboard.py g19_lcd.py g19_hud.py g19_proxmox.py LICENSE; do
+for f in g19_dashboard.py g19_lcd.py g19_hud.py g19_proxmox.py g19_docker.py LICENSE; do
   [ -f "$REPO/$f" ] && install -m 644 "$REPO/$f" "$PREFIX/$f"
 done
 # config.toml / g19_keymap.json sont créés au premier lancement et conservés aux mises à jour
@@ -74,6 +74,8 @@ sed -e "s|@USER@|$SERVICE_USER|g" -e "s|@PREFIX@|$PREFIX|g" "$HERE/g19-hud.servi
 #PVE_TOKEN_ID=g19hud@pve!hud
 #PVE_TOKEN_SECRET=
 #PVE_FINGERPRINT=
+# Écran DOCKER : conteneurs surveillés (vide = tous) ; DOCKER_HOST=tcp://127.0.0.1:2375 pour un proxy en lecture seule
+#G19_DOCKER_CONTAINERS=nextcloud,jellyfin
 EOF
 chmod 600 /etc/default/g19-hud   # peut contenir le secret du jeton d'API
 systemctl daemon-reload

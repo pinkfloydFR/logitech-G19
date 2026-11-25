@@ -392,7 +392,7 @@ class MonitorNative(NativeScreen):
 
     def labels(self):
         lg = self.logic
-        return ["VUE", "CORES", "BAT" if lg.show_bat else "—", "PICS"]
+        return ["VUE", "CORES", "", "PICS"]
 
     def right_text(self, tel):
         t = cpu_temp()
@@ -411,8 +411,7 @@ class MonitorNative(NativeScreen):
 
     def body(self, d, tel, cfg):
         lg = self.logic
-        if not tel.has_battery:
-            lg.show_bat = False
+        lg.show_bat = False  # pas de jauge batterie dans cette vue (serveur)
         peaks = lg.show_peaks
         if lg.graph_mode:
             text(d, (14, 46), "CPU", F(13, True), MUTED, "lm")
@@ -442,20 +441,15 @@ class MonitorNative(NativeScreen):
         self._gauge(d, 34, "CPU", tel.cpu_total, f"{temp:.0f}°C" if temp is not None else f"{len(tel.cpu_cores)} thr",
                     load_color(tel.cpu_total), tel.cpu_peak if peaks else None)
         self._gauge(d, 74, "RAM", tel.ram_pct, f"{tel.ram_used_gb:.1f} Go", load_color(tel.ram_pct))
-        if lg.show_bat and tel.has_battery and tel.bat_pct is not None:
-            self._gauge(d, 114, "BATTERIE", tel.bat_pct, "secteur" if tel.bat_plugged else "batterie",
-                        GREEN if tel.bat_pct > 30 else RED)
-        else:
-            # Utilisation réseau : débit courant (max descendant/montant) rapporté à la vitesse du lien
-            rate_bps = max(tel.dl_speed, tel.ul_speed)
-            link_mbps = link_speed_mbps(tel.phys_nic_name)
-            rate_mbps = rate_bps * 8 / 1e6
-            # Lien inconnu (pont vmbr0, VPN...) : référence = max(100 Mb/s, pic récent)
-            peak_mbps = max(max(tel.dl_hist, default=0.0), max(tel.ul_hist, default=0.0)) * 8 / 1e6
-            pct = 100.0 * rate_mbps / (link_mbps or max(100.0, peak_mbps))
-            detail = f"▼{fmt_rate(tel.dl_speed)} ▲{fmt_rate(tel.ul_speed)}"
-            self._gauge(d, 114, "RÉSEAU", pct, detail, CYAN, None)
-        area(d, (10, 156, W - 10, 208), list(tel.cpu_hist), 100.0, load_color(tel.cpu_total))
+        # Débits ▼ descendant / ▲ montant : deux courbes sur la même échelle (comme l'écran Réseau)
+        dl, ul = list(tel.dl_hist), list(tel.ul_hist)
+        peak = max(10240.0, max(dl, default=1.0), max(ul, default=1.0))
+        for y0, vals, color, arrow, cur in ((116, dl, CYAN, "▼", tel.dl_speed), (164, ul, MAGENTA, "▲", tel.ul_speed)):
+            area(d, (10, y0, W - 10, y0 + 44), vals, peak, color)
+            lab = f"{arrow} {fmt_rate(cur)}"
+            d.rounded_rectangle((14, y0 + 2, 18 + twidth(d, lab, F(12, True)) + 6, y0 + 15), radius=4, fill=PANEL)
+            text(d, (17, y0 + 8), lab, F(12, True), color, "lm")
+            text(d, (W - 16, y0 + 8), f"pic {fmt_rate(peak)}", F(9), MUTED, "rm")
 
 
 class NetworkNative(NativeScreen):
@@ -729,9 +723,117 @@ class ProxmoxNative(NativeScreen):
             text(d, (W // 2, 140), "Aucun invité", F(14), MUTED, "mm")
 
 
+class DockerNative(NativeScreen):
+    TITLE, ACCENT = "DOCKER", (36, 150, 237)
+    ROW_H, LIST_TOP, ROWS = 21, 82, 6
+
+    def __init__(self, client):
+        super().__init__(None)
+        self.client = client
+        self.offset = 0
+        self.only_problems = False
+
+    def on_button(self, btn):
+        if btn == 1:
+            self.offset = max(0, self.offset - 1)
+        elif btn == 2:
+            self.offset += 1
+        elif btn == 3:
+            self.only_problems = not self.only_problems
+            self.offset = 0
+
+    def labels(self):
+        return ["HAUT", "BAS", "TOUS" if self.only_problems else "ALERTES", ""]
+
+    @staticmethod
+    def _problem(c) -> bool:
+        return c.state != "running" or c.health in ("unhealthy", "starting")
+
+    def _look(self, c, watched: bool):
+        """(couleur, étiquette) selon l'état du conteneur."""
+        if c.state == "missing":
+            return RED, "ABSENT"
+        if c.state == "restarting":
+            return AMBER, "REDÉMARRE"
+        if c.state == "paused":
+            return AMBER, "PAUSE"
+        if c.state != "running":
+            return (RED if watched else (70, 78, 98)), "ARRÊTÉ"
+        if c.health == "unhealthy":
+            return RED, "KO"
+        if c.health == "starting":
+            return AMBER, "DÉMARRE"
+        return GREEN, ""
+
+    def right_text(self, tel):
+        cs, err, _ = self.client.snapshot()
+        if not cs:
+            return "…" if not err else "hors ligne"
+        return f"{sum(1 for c in cs if c.state == 'running')}/{len(cs)}"
+
+    def body(self, d, tel, cfg):
+        cs, err, age = self.client.snapshot()
+        watched = bool(self.client.s.containers)
+        if not cs:
+            card(d, (10, 60, W - 10, 170))
+            if err:
+                text(d, (W // 2, 90), "Docker injoignable", F(16, True), RED, "mm")
+                text(d, (W // 2, 122), fit(d, err, F(12), W - 40), F(12), MUTED, "mm")
+                text(d, (W // 2, 148), "nouvelle tentative automatique", F(11), MUTED, "mm")
+            else:
+                text(d, (W // 2, 115), "Connexion à Docker…", F(16), MUTED, "mm")
+            return
+        n_run = sum(1 for c in cs if c.state == "running")
+        n_bad = sum(1 for c in cs if self._problem(c) and (watched or c.state == "running"))
+        card(d, (10, 32, W - 10, 70))
+        text(d, (20, 47), f"{n_run}/{len(cs)}", F(20, True), TEXT, "lm")
+        text(d, (88, 44), "actifs", F(11), MUTED, "lm")
+        text(d, (88, 58), "surveillés" if watched else "tous les conteneurs", F(9), MUTED, "lm")
+        if n_bad:
+            d.rounded_rectangle((W - 112, 40, W - 18, 62), radius=8, fill=mix(PANEL, RED, 0.45))
+            text(d, (W - 65, 51), f"{n_bad} problème{'s' if n_bad > 1 else ''}", F(11, True), TEXT, "mm")
+        else:
+            d.rounded_rectangle((W - 112, 40, W - 18, 62), radius=8, fill=mix(PANEL, GREEN, 0.35))
+            text(d, (W - 65, 51), "tout va bien", F(11, True), TEXT, "mm")
+        if err:
+            text(d, (W - 18, 66), f"données figées ({int(age)} s)", F(9), AMBER, "rm")
+
+        lst = [c for c in cs if (not self.only_problems or self._problem(c))]
+        self.offset = max(0, min(self.offset, max(0, len(lst) - self.ROWS)))
+        text(d, (250, 76), "CPU", F(9, True), MUTED, "rm")
+        text(d, (302, 76), "RAM", F(9, True), MUTED, "rm")
+        for i, c in enumerate(lst[self.offset:self.offset + self.ROWS]):
+            y = self.LIST_TOP + i * self.ROW_H
+            col, tag = self._look(c, watched)
+            run = c.state == "running"
+            card(d, (10, y, W - 14, y + self.ROW_H - 2), fill=PANEL if run else mix(PANEL, BG, 0.5), r=5)
+            d.ellipse((17, y + 6, 24, y + 13), fill=col)
+            text(d, (30, y + 9), fit(d, c.name, F(11, True), 118), F(11, True), TEXT if run else MUTED, "lm")
+            if tag:
+                text(d, (192, y + 9), tag, F(9, True), col, "rm")
+            if run and c.cpu_pct is not None:
+                text(d, (250, y + 9), f"{c.cpu_pct:.0f}%", F(11, True), load_color(c.cpu_pct), "rm")
+            else:
+                text(d, (250, y + 9), "—", F(11), MUTED, "rm")
+            if run and c.mem_bytes is not None:
+                mb = c.mem_bytes / 1024 ** 2
+                lim_pct = 100.0 * c.mem_bytes / c.mem_limit if c.mem_limit and c.mem_limit < 1 << 50 else 0.0
+                text(d, (302, y + 9), f"{mb / 1024:.1f}G" if mb >= 1000 else f"{mb:.0f}M", F(11, True),
+                     load_color(lim_pct) if lim_pct else TEXT, "rm")
+            else:
+                text(d, (302, y + 9), "—", F(11), MUTED, "rm")
+        if len(lst) > self.ROWS:
+            tr = self.ROWS * self.ROW_H
+            th = max(12, int(tr * self.ROWS / len(lst)))
+            ty = self.LIST_TOP + int((tr - th) * self.offset / max(1, len(lst) - self.ROWS))
+            d.rounded_rectangle((W - 10, ty, W - 7, ty + th), radius=1, fill=self.ACCENT)
+        if not lst:
+            text(d, (W // 2, 140), "Aucun problème", F(14), GREEN, "mm")
+
+
 # Écrans disponibles (nom court -> libellé). Sélection : variable G19_SCREENS (liste séparée par des virgules,
-# dans l'ordre voulu) ; « all » = tous. Par défaut : monitoring, réseau, serveurs, proxmox, système.
-DEFAULT_SCREENS = "monitoring,reseau,serveurs,proxmox,systeme"
+# dans l'ordre voulu) ; « all » = tous. Par défaut : monitoring, serveurs, proxmox, docker.
+DEFAULT_SCREENS = "monitoring,serveurs,proxmox,docker"
 
 
 def make_screens(g):
@@ -745,9 +847,10 @@ def make_screens(g):
         "serveurs": lambda: ("SERVEURS", ServersNative(g.ServersScreen())),
         "meteo": lambda: ("MÉTÉO", WeatherNative(g.WeatherScreen())),
         "proxmox": None,   # construit plus bas : n'existe que si l'API Proxmox est configurée (ou PVE_DEMO=1)
+        "docker": None,    # idem : socket Docker accessible, section [docker] ou DOCKER_DEMO=1
         "systeme": lambda: ("SYSTÈME", StorageNative()),
     }
-    order = ["horloge", "chrono", "monitoring", "reseau", "serveurs", "meteo", "proxmox", "systeme"]
+    order = ["horloge", "chrono", "monitoring", "reseau", "serveurs", "meteo", "proxmox", "docker", "systeme"]
     want = os.environ.get("G19_SCREENS", DEFAULT_SCREENS).strip().lower()
     names = order if want == "all" else [n.strip() for n in want.split(",") if n.strip()]
 
@@ -763,11 +866,26 @@ def make_screens(g):
         except Exception as e:
             print(f"[PVE] écran Proxmox désactivé : {e}")
 
+    dk = None
+    if "docker" in names:
+        try:
+            import g19_docker
+            dsettings = g19_docker.load_settings(getattr(g, "CONFIG_FILE", None))
+            if dsettings.configured:
+                dk = g19_docker.DockerClient(dsettings)
+            else:
+                print("[DOCKER] écran Docker ignoré : aucun socket accessible ni [docker] / DOCKER_HOST")
+        except Exception as e:
+            print(f"[DOCKER] écran Docker désactivé : {e}")
+
     defs = []
     for n in names:
         if n == "proxmox":
             if pve is not None:
                 defs.append(("PROXMOX", ProxmoxNative(pve)))
+        elif n == "docker":
+            if dk is not None:
+                defs.append(("DOCKER", DockerNative(dk)))
         elif n in factories:
             defs.append(factories[n]())
         else:

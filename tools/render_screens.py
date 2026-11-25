@@ -16,6 +16,7 @@ import g19_dashboard as g
 import g19_hud
 
 os.environ["PVE_DEMO"] = "1"  # écran Proxmox avec données de démonstration
+os.environ["DOCKER_DEMO"] = "1"  # écran Docker avec des conteneurs fictifs
 os.environ["G19_SCREENS"] = "all"  # tous les écrans, y compris ceux désactivés par défaut
 out = Path(sys.argv[1] if len(sys.argv) > 1 else "docs/screenshots")
 out.mkdir(parents=True, exist_ok=True)
@@ -57,8 +58,9 @@ for i, (name, scr) in enumerate(screens):
     img.save(out / f"{i + 1}-{name.lower().replace('é', 'e').replace('è', 'e')}.png")
     print("ok", name)
 
-sheet = Image.new("RGB", (4 * 330, 2 * 250), (40, 40, 40))
+COLS = 3
+sheet = Image.new("RGB", (COLS * 330, ((len(screens) + COLS - 1) // COLS) * 250), (40, 40, 40))
 for i in range(len(screens)):
     f = sorted(out.glob(f"{i + 1}-*.png"))[0]
-    sheet.paste(Image.open(f), ((i % 4) * 330 + 5, (i // 4) * 250 + 5))
+    sheet.paste(Image.open(f), ((i % COLS) * 330 + 5, (i // COLS) * 250 + 5))
 sheet.save(out / "overview.png")

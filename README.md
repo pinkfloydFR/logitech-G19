@@ -3,7 +3,7 @@
 Un tableau de bord pour l'**écran LCD couleur 320×240** et les touches du **Logitech G19**, sans pilote Logitech
 (ni LGS, ni G HUB) : le G19 est piloté directement en USB avec Python.
 
-Monitoring, réseau, pings, **VM et conteneurs Proxmox**, stockage (et horloge, chrono, météo en option) — avec les touches LCD, G1–G12 et M1–M3
+Monitoring, pings, **VM Proxmox**, **conteneurs Docker** (et réseau, système, horloge, chrono, météo en option) — avec les touches LCD, G1–G12 et M1–M3
 du clavier pour naviguer. Pensé pour un G19 branché sur un **serveur Linux / Proxmox** (service systemd), et utilisable sous **Windows**.
 
 ![Les 7 écrans](docs/screenshots/overview.png)
@@ -16,14 +16,14 @@ Affichés par défaut (dans cet ordre) :
 
 | Écran | Contenu | Boutons ▲ ▼ ◀ ▶ |
 |---|---|---|
-| **Monitoring** | jauges CPU / RAM / **réseau** (débit ▼▲ et % du lien), température, load, courbe, vue par cœur | vue · cœurs · batterie · pics |
-| **Réseau** | débits ▼▲ en direct, deux courbes, totaux | pause · unité · RAZ |
+| **Monitoring** | jauges CPU / RAM, température, load, deux courbes de débit ▼ descendant / ▲ montant, vue par cœur | vue · cœurs · — · pics |
 | **Serveurs** | pings des hôtes configurés, IP locale/publique, VPN | IP · … · ping |
-| **Proxmox** | nœud (CPU/RAM) + liste des **VM et conteneurs** (état, CPU, RAM), via l'API Proxmox en lecture seule | haut · bas · tous/actifs · tri |
-| **Système** | volumes, load, température, swap | — |
+| **Proxmox** | nœud (CPU/RAM) + liste des **VM et conteneurs LXC** (état, CPU, RAM), via l'API Proxmox en lecture seule | haut · bas · tous/actifs · tri |
+| **Docker** | conteneurs **surveillés** (ou tous) : état, santé, CPU, mémoire, compteur de problèmes | haut · bas · alertes/tous |
 
-Disponibles sur demande : **Horloge**, **Chrono** (chronomètre / minuteur) et **Météo** (Open-Meteo, 6 jours + courbe 24 h).
-Choix et ordre avec `G19_SCREENS` (ex. `G19_SCREENS=horloge,monitoring,proxmox`, ou `all`).
+Disponibles sur demande : **Réseau** (débits détaillés), **Système** (volumes, load, température, swap), **Horloge**,
+**Chrono** (chronomètre / minuteur) et **Météo** (Open-Meteo, 6 jours + courbe 24 h).
+Choix et ordre avec `G19_SCREENS` (ex. `G19_SCREENS=horloge,monitoring,proxmox,docker`, ou `all`).
 
 Navigation : **Menu / OK** = écran suivant · **Retour** = précédent · **Home** (carré) = écran on/off ·
 **G1…G12** = saut direct à l'écran n · **M1 / M2** = précédent / suivant · **MR** = écran on/off.
@@ -40,6 +40,23 @@ sudo ./linux/proxmox-token.sh --write      # crée g19hud@pve + jeton, écrit /e
 > ⚠️ Ce script n'a pas encore tourné sur un vrai Proxmox (le client API est testé contre un faux serveur HTTPS,
 > `python -m unittest tests.test_proxmox`). Configuration manuelle : section `[proxmox]` de `config.toml` ou variables `PVE_*`
 > (voir [`g19_proxmox.py`](g19_proxmox.py)). `PVE_DEMO=1` affiche l'écran avec des VM fictives, sans serveur.
+
+### Écran Docker
+
+Surveille **certains** conteneurs (liste dans `config.toml` ou `G19_DOCKER_CONTAINERS="nextcloud,jellyfin"`), ou tous si la liste est vide.
+Un conteneur surveillé mais absent apparaît en rouge (« ABSENT »).
+
+```toml
+[docker]
+host = "unix:///var/run/docker.sock"      # ou "tcp://127.0.0.1:2375" vers un proxy en lecture seule
+containers = ["nextcloud", "jellyfin"]
+```
+
+> ⚠️ **Sécurité** : l'accès au socket Docker équivaut à *root* sur l'hôte. Ne mettez pas l'utilisateur du HUD dans le groupe
+> `docker` à la légère : préférez un proxy en lecture seule
+> ([docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) avec `CONTAINERS=1`, le reste à `0`) et n'exposez
+> jamais le port 2375 sur le réseau. `DOCKER_DEMO=1` affiche l'écran avec des conteneurs fictifs.
+> Le client est testé contre un faux démon (`python -m unittest tests.test_docker`), pas encore contre un vrai Docker.
 
 ## Installation
 
@@ -69,12 +86,13 @@ Variables d'environnement (service Linux : `/etc/default/g19-hud`) :
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `G19_BRIGHTNESS` | `100` | luminosité de l'écran, 0–100 |
-| `G19_SCREENS` | `monitoring,reseau,serveurs,proxmox,systeme` | écrans affichés et leur ordre (`horloge`, `chrono`, `meteo` aussi ; `all` = tous) |
+| `G19_SCREENS` | `monitoring,serveurs,proxmox,docker` | écrans affichés et leur ordre (`reseau`, `systeme`, `horloge`, `chrono`, `meteo` aussi ; `all` = tous) |
 | `G19_UI` | `native` | `native` = interface couleur ; `retro` = rendu monochrome 160×43 agrandi |
 | `G19_THEME` | `amber` | thème du mode `retro` : `amber`, `blue`, `green`, `white`, `amber-dark`, `matrix` |
 | `G19_BACKEND` | `auto` | `g19`, ou `g15` pour le G15 d'origine |
 | `G19_DEBUG` | — | `1` = affiche les rapports de touches bruts |
 | `PVE_HOST`, `PVE_TOKEN_ID`, `PVE_TOKEN_SECRET`, `PVE_FINGERPRINT`, `PVE_DEMO` | — | écran Proxmox (voir plus haut) |
+| `DOCKER_HOST`, `G19_DOCKER_CONTAINERS`, `DOCKER_DEMO` | socket local si accessible | écran Docker (voir plus haut) |
 
 Hôtes pingés, ville météo de repli, FPS… : `config.toml`, créé au premier lancement dans le dossier du programme.
 
@@ -91,16 +109,17 @@ l'envoi), et les touches arrivent sur deux endpoints interrupt. Le protocole com
 | `g19_lcd.py` | pilote USB (pyusb/libusb) |
 | `g19_hud.py` | interface couleur native 320×240 |
 | `g19_proxmox.py` | client de l'API Proxmox (lecture seule) |
+| `g19_docker.py` | client de l'API Docker (lecture seule) |
 | `g19_dashboard.py` | application : télémétrie, boutons, boucle de rendu, backends |
 | `tools/render_screens.py` | rend les écrans en PNG sans matériel |
 | `linux/`, `windows/` | installation par système |
 
 ## Origine du projet
 
-Ce projet est un **fork de [DPKoss/G15-Retro-HUD](https://github.com/DPKoss/G15-Retro-HUD)** (MIT), un tableau de bord
-pour l'écran monochrome 160×43 des Logitech **G15**. On en a gardé la télémétrie, la logique des écrans et le backend
-G15 (toujours utilisable avec `G19_BACKEND=g15`) ; le support du G19 (pilote, interface couleur, portage Linux et
-Windows) est un ajout. Le README, les captures et les fichiers de packaging d'origine sont conservés dans
+Ce projet fait suite à une idée d'après le projet de [DPKoss/G15-Retro-HUD](https://github.com/DPKoss/G15-Retro-HUD) (MIT),
+un tableau de bord pour l'écran monochrome 160×43 des Logitech **G15** : en faire un fork pour le G19. On en a gardé
+la télémétrie, la logique des écrans et le backend G15 (toujours utilisable avec `G19_BACKEND=g15`) ; le support du G19
+(pilote, interface couleur, écrans Proxmox et Docker, portage Linux et Windows) est un ajout. Le README, les captures et les fichiers de packaging d'origine sont conservés dans
 [`docs/upstream-g15/`](docs/upstream-g15/).
 
 ## Licence

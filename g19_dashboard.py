@@ -3255,7 +3255,9 @@ if __name__ == "__main__":
                 pass
     _max_s = float(os.environ.get("G19_MAX_SECONDS", "0") or 0)  # tests : arrêt automatique propre
     if _max_s > 0:
-        threading.Timer(_max_s, app.stop).start()
+        _t = threading.Timer(_max_s, app.stop)
+        _t.daemon = True  # sinon le minuteur retient le processus après un arrêt propre
+        _t.start()
     _stop_file = os.environ.get("G19_STOPFILE")  # arrêt propre sans signal (Windows) : créer ce fichier
     if _stop_file:
         def _watch_file():
