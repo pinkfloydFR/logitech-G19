@@ -1,17 +1,17 @@
-# G15-Retro-HUD — port Logitech G19 (Linux / WSL / Proxmox)
+# Logitech G19 HUD — notes techniques (Linux / Windows / Proxmox)
 
-Fork de DPKoss/G15-Retro-HUD (MIT) adapté au **Logitech G19** (écran couleur 320x240) sous **Linux**.
+Fork de DPKoss/G15-Retro-HUD (MIT, tableau de bord G15 d origine) adapté au **Logitech G19** (écran couleur 320x240) sous **Linux**.
 Testé sur un G19 réel via WSL2 (usbipd), cible finale : hôte Proxmox (Debian).
 
 ## Fichiers ajoutés / modifiés
 - `g19_lcd.py` : pilote USB bas niveau (pyusb/libusb) : trames LCD, rétroéclairage, LED M, luminosité, touches LCD, touches G/M.
-- `g19_hud.py` : interface **native couleur 320x240** (7 écrans). Réutilise la logique/boutons des écrans G15 d'origine (`logic`), ne redessine que le rendu. `make_screens(module_g15_dashboard)`.
-- `g15_dashboard.py` : `G19Controller` (même interface publique que `G15HidController`), `create_hw()` (choix du backend), portage Linux (polices DejaVu, NVML `libnvidia-ml.so.1`, route par défaut via `/proc/net/route`, ping Linux, noms d'interfaces Proxmox), arrêt propre sur SIGINT/SIGTERM. `hidapi` est devenu optionnel.
+- `g19_hud.py` : interface **native couleur 320x240** (7 écrans). Réutilise la logique/boutons des écrans G15 d'origine (`logic`), ne redessine que le rendu. `make_screens(module_g19_dashboard)`.
+- `g19_dashboard.py` : `G19Controller` (même interface publique que `G15HidController`), `create_hw()` (choix du backend), portage Linux (polices DejaVu, NVML `libnvidia-ml.so.1`, route par défaut via `/proc/net/route`, ping Linux, noms d'interfaces Proxmox), arrêt propre sur SIGINT/SIGTERM. `hidapi` est devenu optionnel.
 
 ## Variables d'environnement
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `G15_BACKEND` | `auto` | `g15` / `g19` / `auto` (G19 si branché) |
+| `G19_BACKEND` | `auto` | `g15` / `g19` / `auto` (G19 si branché) |
 | `G19_UI` | `native` | `retro` = rendu G15 160x43 agrandi ×2 (thèmes ci-dessous) |
 | `G19_THEME` | `amber` | retro uniquement : `amber`, `blue`, `green`, `white`, `amber-dark`, `matrix` |
 | `G19_LAYOUT` | `2x` | retro : `2x` (pixels carrés, centré) ou `stretch` (2x5) |
@@ -43,7 +43,7 @@ Périphérique **`046d:c229`** (« Display interface » / « Macro Interface »)
 - Remap des touches LCD : `g19_keymap.json` (`{"UP": "1", "MENU": "0", "CANCEL": "PREV_PAGE"}`).
 
 ## Pièges (apprentissages)
-- **Ne jamais interrompre brutalement une écriture de trame** (SIGKILL, `pkill -9`, fin de process en plein envoi) : le firmware reste désynchronisé, l'écran fige (souvent orange) et seul un **débranchement/rebranchement USB** le débloque (un `reset()` logiciel ne suffit pas). D'où les handlers SIGINT/SIGTERM de `g15_dashboard.py` : toujours arrêter le HUD par SIGTERM/SIGINT.
+- **Ne jamais interrompre brutalement une écriture de trame** (SIGKILL, `pkill -9`, fin de process en plein envoi) : le firmware reste désynchronisé, l'écran fige (souvent orange) et seul un **débranchement/rebranchement USB** le débloque (un `reset()` logiciel ne suffit pas). D'où les handlers SIGINT/SIGTERM de `g19_dashboard.py` : toujours arrêter le HUD par SIGTERM/SIGINT.
 - Après un envoi de test isolé, garder le périphérique ouvert ~2 s avant `close()` : sinon l'image peut ne pas s'afficher.
 - Les erreurs `USBError [Errno 5]` peuvent survenir sur EP 0x83 quand on appuie sur la touche soleil : toujours les intercepter dans les boucles de lecture.
 - Deux processus ne peuvent pas ouvrir le G19 en même temps (interfaces « busy »).
@@ -53,11 +53,11 @@ Périphérique **`046d:c229`** (« Display interface » / « Macro Interface »)
 1. `usbipd bind --busid <BUSID>` (une fois) puis `usbipd attach --wsl --busid <BUSID>` pour **`046d:c229`** uniquement (pas le clavier `c228`).
 2. Garder une session WSL ouverte (`wsl sleep 3000`), sinon `attach` échoue (« no WSL 2 distribution running »).
 3. venv : `python3 -m venv ~/g19/venv && ~/g19/venv/bin/pip install pyusb pillow psutil numpy` (+ `fonts-dejavu-core`, `libusb-1.0-0`).
-4. Lancer : `cd src && ~/g19/venv/bin/python -u g15_dashboard.py` (root dans WSL, pas besoin d'udev).
+4. Lancer : `cd src && ~/g19/venv/bin/python -u g19_dashboard.py` (root dans WSL, pas besoin d'udev).
 5. Test sans matériel : `G19_DUMP=/tmp/f.png` produit la dernière trame en PNG.
 
 ## Organisation du dépôt (un seul dépôt, cœur commun)
-- Racine : cœur commun (`g15_dashboard.py`, `g19_lcd.py`, `g19_hud.py`) — à corriger une seule fois pour les deux OS.
+- Racine : cœur commun (`g19_dashboard.py`, `g19_lcd.py`, `g19_hud.py`) — à corriger une seule fois pour les deux OS.
 - `linux/` : installation Debian/Ubuntu/Proxmox (`install.sh`, `uninstall.sh`, `g19-hud.service`, `99-g19-hud.rules`).
 - `windows/` : `run.ps1`, `requirements.txt`, `README.md` — testé sur G19 réel (voir section Windows). Reste : `.exe` PyInstaller, démarrage auto, écran Média WinRT en couleur native.
 

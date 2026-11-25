@@ -1,16 +1,8 @@
-# Socle obligatoire
-hidapi>=0.14.0
-psutil>=5.9.0
-pillow>=10.0.0
-
-# Interface System Tray (optionnel — repli console si absent)
-pystray>=0.19.5
-
-# Audio WASAPI Loopback, FFT & effets matriciels Demoscene (optionnel)
-PyAudioWPatch>=0.2.12.6
-numpy>=1.26.0
-
-# Contrôle & métadonnées Média Windows via WinRT GSMTC (optionnel)
-winrt-runtime>=3.0.0
-winrt-Windows.Foundation>=3.0.0
-winrt-Windows.Media.Control>=3.0.0
+# Dépendances (cœur du HUD G19). Voir windows/requirements.txt et linux/install.sh (paquets apt) pour chaque OS.
+pyusb>=1.2
+libusb-package>=1.0; sys_platform == "win32"   # embarque libusb-1.0.dll sous Windows
+pillow
+psutil
+numpy
+pystray; sys_platform == "win32"                # optionnel : icône dans la barre système
+# hidapi                                         # uniquement pour le backend G15 d'origine (G19_BACKEND=g15)

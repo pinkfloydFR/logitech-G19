@@ -29,7 +29,7 @@ fi
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname "$HERE")"
 
-for f in g15_dashboard.py g19_lcd.py g19_hud.py; do
+for f in g19_dashboard.py g19_lcd.py g19_hud.py; do
   [ -f "$REPO/$f" ] || { echo "Fichier manquant : $REPO/$f" >&2; exit 1; }
 done
 
@@ -50,7 +50,7 @@ fi
 
 echo "==> Fichiers dans $PREFIX"
 install -d -m 755 "$PREFIX"
-for f in g15_dashboard.py g19_lcd.py g19_hud.py LICENSE; do
+for f in g19_dashboard.py g19_lcd.py g19_hud.py LICENSE; do
   [ -f "$REPO/$f" ] && install -m 644 "$REPO/$f" "$PREFIX/$f"
 done
 # config.toml / g19_keymap.json sont créés au premier lancement et conservés aux mises à jour

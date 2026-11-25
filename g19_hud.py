@@ -2,7 +2,7 @@
 
 Les écrans réutilisent la logique (boutons, états) des écrans G15 d'origine et ne redessinent
 que le rendu : chaque écran ci-dessous enveloppe l'objet « logic » du projet.
-Usage : make_screens(module_g15_dashboard) -> liste [(nom, écran)].
+Usage : make_screens(module_g19_dashboard) -> liste [(nom, écran)].
 """
 from __future__ import annotations
 
@@ -612,7 +612,7 @@ class StorageNative(NativeScreen):
 
 
 def make_screens(g):
-    """g = module g15_dashboard (fournit ClockScreen, ChronoScreen, ... et wmo_info)."""
+    """g = module g19_dashboard (fournit ClockScreen, ChronoScreen, ... et wmo_info)."""
     defs = [
         ("HORLOGE", ClockNative(g.ClockScreen())),
         ("CHRONO", ChronoNative(g.ChronoScreen())),

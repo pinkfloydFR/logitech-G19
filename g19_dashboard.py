@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Logitech G15 v2 / v1 Autonomous Dashboard (Windows 11 x64 — Zéro driver LGS/GHUB)
-Version 0.2.0 — Monolithe Python autonome (voir README.md pour le guide complet).
+Logitech G19 HUD — tableau de bord pour l'écran LCD couleur 320x240 du G19 (Linux / Windows, sans pilote Logitech).
+Fork de DPKoss/G15-Retro-HUD : le backend G15 d'origine (LCD 160x43, hidapi) reste disponible (G19_BACKEND=g15).
+Voir README.md et CLAUDE.md.
 """
 
 import asyncio
@@ -115,7 +116,7 @@ DEFAULT_G15V2_KEYMAP = {
 }
 
 DEFAULT_CONFIG_TOML = """# ==============================================================================
-# Configuration G15-Retro-HUD v0.2.0 (éditable à chaud -> Tray : "Recharger config.toml")
+# Configuration G19 HUD (éditable à chaud -> Tray : "Recharger config.toml")
 # ==============================================================================
 
 [general]
@@ -1215,7 +1216,7 @@ class TelemetryHub:
     # --- Boucle WAN IP, Géolocalisation IP & Prévisions Open-Meteo (7j + 24h) ---
     @staticmethod
     def _http_json(url: str, timeout: float = 4.5) -> dict:
-        req = urllib.request.Request(url, headers={"User-Agent": "G15-HUD/0.2.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "G19-HUD/0.3.0"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
 
@@ -2812,7 +2813,7 @@ class G15HidController:
 
 
 # ==============================================================================
-# CONTRÔLEUR LOGITECH G19 (LIBUSB / PYUSB, ÉCRAN COULEUR 320x240, MÊME INTERFACE QUE LE G15)
+# CONTRÔLEUR LOGITECH G19 (LIBUSB / PYUSB, ÉCRAN COULEUR 320x240)
 # ==============================================================================
 # Thèmes (couleur fond "LCD éteint", couleur pixel "allumé") ; le rendu 160x43 reste inchangé.
 G19_THEMES = {
@@ -3053,8 +3054,8 @@ class G19Controller:
 
 
 def create_hw(cfg_mgr: ConfigManager):
-    """Choisit le backend : G15_BACKEND=g15|g19|auto (auto = G19 si branché, sinon G15)."""
-    want = os.environ.get("G15_BACKEND", "auto").lower()
+    """Choisit le backend : G19_BACKEND=g19|g15|auto (auto = G19 si branché, sinon G15 historique)."""
+    want = (os.environ.get("G19_BACKEND") or os.environ.get("G15_BACKEND") or "auto").lower()
     if want == "g19" or (want == "auto" and HAS_G19 and (not HAS_HID or _g19_present())):
         if not HAS_G19:
             sys.exit("Backend G19 demandé mais pyusb/libusb est indisponible (pip install pyusb).")
@@ -3074,7 +3075,7 @@ def _g19_present() -> bool:
 # ==============================================================================
 # APPLICATION PRINCIPALE (8 ÉCRANS, MASQUAGE AUTO 3s & SYSTEM TRAY)
 # ==============================================================================
-class G15App:
+class HudApp:
     def __init__(self):
         self.cfg_mgr = ConfigManager(CONFIG_FILE)
         self.hw = create_hw(self.cfg_mgr)
@@ -3214,24 +3215,24 @@ class G15App:
             icon.stop()
 
 
-def create_tray_icon(app: G15App):
+def create_tray_icon(app: HudApp):
     ico = Image.new("RGB", (64, 64), (20, 20, 20))
     d = ImageDraw.Draw(ico)
     d.rectangle((4, 14, 60, 50), outline=(255, 140, 0), width=3)
-    d.text((14, 25), "G15", fill=(255, 140, 0))
+    d.text((14, 25), "G19", fill=(255, 140, 0))
     menu = pystray.Menu(
         pystray.MenuItem("Page suivante", lambda icon, item: app.next_page()),
         pystray.MenuItem("Recharger config.toml", lambda icon, item: app.reload_config()),
         pystray.MenuItem("Recalibrer les boutons", lambda icon, item: app.hw.start_calibration()),
-        pystray.MenuItem("Quitter G15 HUD", app.stop),
+        pystray.MenuItem("Quitter G19 HUD", app.stop),
     )
-    icon = pystray.Icon("g15_hud", ico, "G15-Retro-HUD v0.2.0", menu)
+    icon = pystray.Icon("g19_hud", ico, "G19 HUD", menu)
     app.tray_icon = icon
     return icon
 
 
 if __name__ == "__main__":
-    app = G15App()
+    app = HudApp()
     # Arrêt propre (systemd / Ctrl+C / Ctrl+Break) : on laisse finir la trame USB en cours.
     # Couper une trame G19 en plein envoi laisse l'écran figé jusqu'au rebranchement.
     import signal

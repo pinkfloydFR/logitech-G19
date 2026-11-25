@@ -7,13 +7,13 @@ Wants=network-online.target
 Type=simple
 User=@USER@
 WorkingDirectory=@PREFIX@
-Environment=G15_BACKEND=g19
+Environment=G19_BACKEND=g19
 Environment=G19_UI=native
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 # Surcharges : G19_BRIGHTNESS=60, G19_UI=retro, G19_THEME=green ...
 EnvironmentFile=-/etc/default/g19-hud
-ExecStart=/usr/bin/python3 @PREFIX@/g15_dashboard.py
+ExecStart=/usr/bin/python3 @PREFIX@/g19_dashboard.py
 Restart=always
 RestartSec=3
 # Arrêt PROPRE obligatoire : couper une trame USB en plein envoi fige l'écran du G19.

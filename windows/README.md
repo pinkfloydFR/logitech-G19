@@ -1,6 +1,6 @@
 # G19 HUD — Windows
 
-Même cœur que la version Linux (`g19_lcd.py`, `g19_hud.py`, `g15_dashboard.py`). Testé sur un G19 réel sous Windows 11, Python 3.14.
+Même cœur que la version Linux (`g19_lcd.py`, `g19_hud.py`, `g19_dashboard.py`). Testé sur un G19 réel sous Windows 11, Python 3.14.
 
 ## Installation (une seule fois)
 

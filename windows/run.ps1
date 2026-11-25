@@ -15,12 +15,12 @@ if (-not (Test-Path "$venv\Scripts\python.exe")) {
     & "$venv\Scripts\python.exe" -m pip install -q -r (Join-Path $PSScriptRoot "requirements.txt")
 }
 
-$env:G15_BACKEND = "g19"
+$env:G19_BACKEND = "g19"
 if (-not $env:G19_UI) { $env:G19_UI = "native" }
 $env:PYTHONIOENCODING = "utf-8"
 Set-Location $repo
 if ($Console) {
-    & "$venv\Scripts\python.exe" -u g15_dashboard.py
+    & "$venv\Scripts\python.exe" -u g19_dashboard.py
 } else {
-    Start-Process -FilePath "$venv\Scripts\pythonw.exe" -ArgumentList "g15_dashboard.py" -WorkingDirectory $repo -WindowStyle Hidden
+    Start-Process -FilePath "$venv\Scripts\pythonw.exe" -ArgumentList "g19_dashboard.py" -WorkingDirectory $repo -WindowStyle Hidden
 }
