@@ -152,6 +152,17 @@ refresh_minutes = 10
 [immersive]
 softkey_hide_sec = 3.0
 auto_cycle_sec = 25.0
+
+# Écran PROXMOX (VM / conteneurs, API en lecture seule) : décommenter et renseigner un jeton PVEAuditor
+# (création : linux/proxmox-token.sh). Le secret peut aussi venir de PVE_TOKEN_SECRET (/etc/default/g19-hud).
+# [proxmox]
+# host = "127.0.0.1"
+# port = 8006
+# token_id = "g19hud@pve!hud"
+# token_secret = ""
+# verify_ssl = false
+# fingerprint = ""      # SHA-256 du certificat (épingle le serveur quand verify_ssl = false)
+# interval_sec = 5
 """
 
 
@@ -3245,6 +3256,15 @@ if __name__ == "__main__":
     _max_s = float(os.environ.get("G19_MAX_SECONDS", "0") or 0)  # tests : arrêt automatique propre
     if _max_s > 0:
         threading.Timer(_max_s, app.stop).start()
+    _stop_file = os.environ.get("G19_STOPFILE")  # arrêt propre sans signal (Windows) : créer ce fichier
+    if _stop_file:
+        def _watch_file():
+            while app.running:
+                if Path(_stop_file).exists():
+                    app.stop()
+                    return
+                time.sleep(0.5)
+        threading.Thread(target=_watch_file, daemon=True).start()
     if HAS_TRAY:
         worker = threading.Thread(target=app.run_loop, daemon=True)
         worker.start()

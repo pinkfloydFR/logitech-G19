@@ -3,27 +3,43 @@
 Un tableau de bord pour l'**écran LCD couleur 320×240** et les touches du **Logitech G19**, sans pilote Logitech
 (ni LGS, ni G HUB) : le G19 est piloté directement en USB avec Python.
 
-Horloge, chrono, monitoring CPU/RAM/GPU, réseau, pings, météo, stockage — avec les touches LCD, G1–G12 et M1–M3
+Monitoring, réseau, pings, **VM et conteneurs Proxmox**, stockage (et horloge, chrono, météo en option) — avec les touches LCD, G1–G12 et M1–M3
 du clavier pour naviguer. Pensé pour un G19 branché sur un **serveur Linux / Proxmox** (service systemd), et utilisable sous **Windows**.
 
 ![Les 7 écrans](docs/screenshots/overview.png)
 
-*(captures générées avec des données fictives par `tools/render_screens.py`, sans G19 branché)*
+*(les 8 écrans, y compris ceux en option ; captures générées avec des données fictives par `tools/render_screens.py`, sans G19 branché)*
 
 ## Les écrans
 
-| # | Écran | Contenu | Boutons ▲ ▼ ◀ ▶ |
-|---|---|---|---|
-| 1 | Horloge | heure, date, CPU/RAM, IP ou uptime | 12/24 · secondes · UPT/IP |
-| 2 | Chrono | chronomètre (tours) ou minuteur avec alerte | start/pause · tour/durée · reset · mode |
-| 3 | Monitoring | jauges CPU/RAM/GPU (ou disque), température, load, courbe, vue par cœur | vue · cœurs · batterie · pics |
-| 4 | Réseau | débits ▼▲ en direct, deux courbes, totaux | pause · unité · RAZ |
-| 5 | Serveurs | pings des hôtes configurés, IP locale/publique, VPN | IP · … · ping |
-| 6 | Météo | conditions, 6 jours, courbe 24 h avec pluie (Open-Meteo) | jour− · jour+ · 24 h · MAJ |
-| 7 | Système | volumes, load, température, swap | — |
+Affichés par défaut (dans cet ordre) :
+
+| Écran | Contenu | Boutons ▲ ▼ ◀ ▶ |
+|---|---|---|
+| **Monitoring** | jauges CPU / RAM / **réseau** (débit ▼▲ et % du lien), température, load, courbe, vue par cœur | vue · cœurs · batterie · pics |
+| **Réseau** | débits ▼▲ en direct, deux courbes, totaux | pause · unité · RAZ |
+| **Serveurs** | pings des hôtes configurés, IP locale/publique, VPN | IP · … · ping |
+| **Proxmox** | nœud (CPU/RAM) + liste des **VM et conteneurs** (état, CPU, RAM), via l'API Proxmox en lecture seule | haut · bas · tous/actifs · tri |
+| **Système** | volumes, load, température, swap | — |
+
+Disponibles sur demande : **Horloge**, **Chrono** (chronomètre / minuteur) et **Météo** (Open-Meteo, 6 jours + courbe 24 h).
+Choix et ordre avec `G19_SCREENS` (ex. `G19_SCREENS=horloge,monitoring,proxmox`, ou `all`).
 
 Navigation : **Menu / OK** = écran suivant · **Retour** = précédent · **Home** (carré) = écran on/off ·
-**G1–G7** = saut direct à un écran · **M1 / M2** = précédent / suivant · **MR** = écran on/off.
+**G1…G12** = saut direct à l'écran n · **M1 / M2** = précédent / suivant · **MR** = écran on/off.
+
+### Écran Proxmox
+
+Lecture seule, via un jeton d'API qui n'a que le rôle `PVEAuditor` (il ne peut ni démarrer ni arrêter une VM).
+Sur l'hôte Proxmox :
+
+```bash
+sudo ./linux/proxmox-token.sh --write      # crée g19hud@pve + jeton, écrit /etc/default/g19-hud (0600), redémarre le service
+```
+
+> ⚠️ Ce script n'a pas encore tourné sur un vrai Proxmox (le client API est testé contre un faux serveur HTTPS,
+> `python -m unittest tests.test_proxmox`). Configuration manuelle : section `[proxmox]` de `config.toml` ou variables `PVE_*`
+> (voir [`g19_proxmox.py`](g19_proxmox.py)). `PVE_DEMO=1` affiche l'écran avec des VM fictives, sans serveur.
 
 ## Installation
 
@@ -53,10 +69,12 @@ Variables d'environnement (service Linux : `/etc/default/g19-hud`) :
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `G19_BRIGHTNESS` | `100` | luminosité de l'écran, 0–100 |
+| `G19_SCREENS` | `monitoring,reseau,serveurs,proxmox,systeme` | écrans affichés et leur ordre (`horloge`, `chrono`, `meteo` aussi ; `all` = tous) |
 | `G19_UI` | `native` | `native` = interface couleur ; `retro` = rendu monochrome 160×43 agrandi |
 | `G19_THEME` | `amber` | thème du mode `retro` : `amber`, `blue`, `green`, `white`, `amber-dark`, `matrix` |
 | `G19_BACKEND` | `auto` | `g19`, ou `g15` pour le G15 d'origine |
 | `G19_DEBUG` | — | `1` = affiche les rapports de touches bruts |
+| `PVE_HOST`, `PVE_TOKEN_ID`, `PVE_TOKEN_SECRET`, `PVE_FINGERPRINT`, `PVE_DEMO` | — | écran Proxmox (voir plus haut) |
 
 Hôtes pingés, ville météo de repli, FPS… : `config.toml`, créé au premier lancement dans le dossier du programme.
 
@@ -72,6 +90,7 @@ l'envoi), et les touches arrivent sur deux endpoints interrupt. Le protocole com
 |---|---|
 | `g19_lcd.py` | pilote USB (pyusb/libusb) |
 | `g19_hud.py` | interface couleur native 320×240 |
+| `g19_proxmox.py` | client de l'API Proxmox (lecture seule) |
 | `g19_dashboard.py` | application : télémétrie, boutons, boucle de rendu, backends |
 | `tools/render_screens.py` | rend les écrans en PNG sans matériel |
 | `linux/`, `windows/` | installation par système |

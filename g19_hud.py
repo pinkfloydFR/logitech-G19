@@ -238,6 +238,19 @@ def load_avg():
     return cached("load", 3, lambda: psutil.getloadavg())
 
 
+def fmt_rate(bps: float) -> str:
+    kb = bps / 1024.0
+    return f"{kb:.0f}Ko/s" if kb < 1000 else f"{kb / 1024.0:.1f}Mo/s"
+
+
+def link_speed_mbps(nic):
+    """Vitesse négociée de la carte (Mb/s) ou None si inconnue (ponts, VPN...)."""
+    def _s():
+        st = psutil.net_if_stats().get(nic) if nic else None
+        return float(st.speed) if st and st.speed and st.speed > 0 else None
+    return cached(f"link:{nic}", 10, _s)
+
+
 def disks():
     def _d():
         out = []
@@ -432,14 +445,16 @@ class MonitorNative(NativeScreen):
         if lg.show_bat and tel.has_battery and tel.bat_pct is not None:
             self._gauge(d, 114, "BATTERIE", tel.bat_pct, "secteur" if tel.bat_plugged else "batterie",
                         GREEN if tel.bat_pct > 30 else RED)
-        elif tel.nvml.available:
-            self._gauge(d, 114, "GPU", tel.gpu_util, f"{tel.gpu_vram_mb / 1024:.1f} Go"
-                        + (f" {tel.gpu_temp_c}°C" if tel.gpu_temp_c is not None else ""), load_color(tel.gpu_util),
-                        tel.gpu_peak_util if peaks else None)
         else:
-            ds = disks()
-            if ds:
-                self._gauge(d, 114, f"DISQUE {ds[0][0]}", ds[0][3], f"{ds[0][1]:.0f}/{ds[0][2]:.0f} Go", load_color(ds[0][3]))
+            # Utilisation réseau : débit courant (max descendant/montant) rapporté à la vitesse du lien
+            rate_bps = max(tel.dl_speed, tel.ul_speed)
+            link_mbps = link_speed_mbps(tel.phys_nic_name)
+            rate_mbps = rate_bps * 8 / 1e6
+            # Lien inconnu (pont vmbr0, VPN...) : référence = max(100 Mb/s, pic récent)
+            peak_mbps = max(max(tel.dl_hist, default=0.0), max(tel.ul_hist, default=0.0)) * 8 / 1e6
+            pct = 100.0 * rate_mbps / (link_mbps or max(100.0, peak_mbps))
+            detail = f"▼{fmt_rate(tel.dl_speed)} ▲{fmt_rate(tel.ul_speed)}"
+            self._gauge(d, 114, "RÉSEAU", pct, detail, CYAN, None)
         area(d, (10, 156, W - 10, 208), list(tel.cpu_hist), 100.0, load_color(tel.cpu_total))
 
 
@@ -611,17 +626,154 @@ class StorageNative(NativeScreen):
             text(d, (x0 + cw // 2, y + 34), v, F(18, True), c, "mm")
 
 
+class ProxmoxNative(NativeScreen):
+    TITLE, ACCENT = "PROXMOX", ORANGE
+    ROW_H, LIST_TOP, ROWS = 21, 82, 6
+    SORTS = ("ID", "CPU", "RAM")
+
+    def __init__(self, client):
+        super().__init__(None)
+        self.client = client
+        self.offset = 0
+        self.only_running = False
+        self.sort_i = 0
+
+    def on_button(self, btn):
+        if btn == 1:
+            self.offset = max(0, self.offset - 1)
+        elif btn == 2:
+            self.offset += 1          # borné au rendu
+        elif btn == 3:
+            self.only_running = not self.only_running
+            self.offset = 0
+        elif btn == 4:
+            self.sort_i = (self.sort_i + 1) % len(self.SORTS)
+            self.offset = 0
+
+    def labels(self):
+        return ["HAUT", "BAS", "TOUS" if self.only_running else "ACTIFS", f"TRI:{self.SORTS[self.sort_i]}"]
+
+    def right_text(self, tel):
+        nodes, guests, err, _ = self.client.snapshot()
+        if not guests:
+            return "…" if not err else "hors ligne"
+        run = sum(1 for g in guests if g.status == "running")
+        return f"{nodes[0].name if nodes else ''}  {run}/{len(guests)}"
+
+    @staticmethod
+    def _pct(used, total):
+        return 100.0 * used / total if total else 0.0
+
+    def body(self, d, tel, cfg):
+        nodes, guests, err, age = self.client.snapshot()
+        if not guests:
+            card(d, (10, 60, W - 10, 170))
+            if err:
+                text(d, (W // 2, 90), "API Proxmox injoignable", F(16, True), RED, "mm")
+                text(d, (W // 2, 122), fit(d, err, F(12), W - 40), F(12), MUTED, "mm")
+                text(d, (W // 2, 148), "nouvelle tentative automatique", F(11), MUTED, "mm")
+            else:
+                text(d, (W // 2, 115), "Connexion à Proxmox…", F(16), MUTED, "mm")
+            return
+
+        # --- carte du nœud ---
+        n = nodes[0] if nodes else None
+        card(d, (10, 32, W - 10, 70))
+        if n:
+            col = GREEN if n.status == "online" else RED
+            d.ellipse((20, 44, 29, 53), fill=col)
+            text(d, (35, 49), n.name, F(13, True), TEXT, "lm")
+            cpu, ram = n.cpu * 100.0, self._pct(n.mem, n.maxmem)
+            text(d, (110, 41), "CPU", F(10, True), MUTED, "lm")
+            text(d, (W - 130, 41), f"{cpu:.0f}%", F(10, True), load_color(cpu), "rm")
+            bar(d, 110, 49, W - 250, 7, cpu, load_color(cpu))
+            text(d, (W - 118, 41), "RAM", F(10, True), MUTED, "lm")
+            text(d, (W - 18, 41), f"{ram:.0f}%", F(10, True), load_color(ram), "rm")
+            bar(d, W - 118, 49, 100, 7, ram, load_color(ram))
+            text(d, (20, 63), f"{n.mem / 1024 ** 3:.0f}/{n.maxmem / 1024 ** 3:.0f} Go", F(9), MUTED, "lm")
+        if err:
+            text(d, (W - 18, 63), f"données figées ({int(age)} s)", F(9), AMBER, "rm")
+
+        # --- liste ---
+        lst = [g for g in guests if (g.status == "running" or not self.only_running)]
+        key = {0: lambda g: g.vmid, 1: lambda g: (-g.cpu, g.vmid), 2: lambda g: (-self._pct(g.mem, g.maxmem), g.vmid)}[self.sort_i]
+        lst.sort(key=key)
+        self.offset = max(0, min(self.offset, max(0, len(lst) - self.ROWS)))
+        text(d, (208, 76), "CPU", F(9, True), MUTED, "rm")
+        text(d, (262, 76), "RAM", F(9, True), MUTED, "rm")
+        for i, g in enumerate(lst[self.offset:self.offset + self.ROWS]):
+            y = self.LIST_TOP + i * self.ROW_H
+            run = g.status == "running"
+            card(d, (10, y, W - 14, y + self.ROW_H - 2), fill=PANEL if run else mix(PANEL, BG, 0.5), r=5)
+            dot = GREEN if run else (AMBER if g.status == "paused" else (70, 78, 98))
+            d.ellipse((17, y + 6, 24, y + 13), fill=dot)
+            fg = TEXT if run else MUTED
+            text(d, (30, y + 9), str(g.vmid), F(10, False, True), MUTED, "lm")
+            d.rounded_rectangle((58, y + 4, 76, y + 15), radius=3, fill=BLUE if g.kind == "qemu" else TEAL)
+            text(d, (67, y + 9), "VM" if g.kind == "qemu" else "CT", F(8, True), BG, "mm")
+            text(d, (82, y + 9), fit(d, g.name, F(11, True), 118), F(11, True), fg, "lm")
+            if run:
+                cpu, ram = g.cpu * 100.0, self._pct(g.mem, g.maxmem)
+                text(d, (208, y + 9), f"{cpu:.0f}%", F(11, True), load_color(cpu), "rm")
+                text(d, (262, y + 9), f"{ram:.0f}%", F(11, True), load_color(ram), "rm")
+                bar(d, 268, y + 6, 36, 6, ram, load_color(ram))
+            else:
+                text(d, (208, y + 9), "—", F(11), MUTED, "rm")
+                text(d, (262, y + 9), "—", F(11), MUTED, "rm")
+        if len(lst) > self.ROWS:   # ascenseur
+            tr = self.ROWS * self.ROW_H
+            th = max(12, int(tr * self.ROWS / len(lst)))
+            ty = self.LIST_TOP + int((tr - th) * self.offset / max(1, len(lst) - self.ROWS))
+            d.rounded_rectangle((W - 10, ty, W - 7, ty + th), radius=1, fill=ORANGE)
+        if not lst:
+            text(d, (W // 2, 140), "Aucun invité", F(14), MUTED, "mm")
+
+
+# Écrans disponibles (nom court -> libellé). Sélection : variable G19_SCREENS (liste séparée par des virgules,
+# dans l'ordre voulu) ; « all » = tous. Par défaut : monitoring, réseau, serveurs, proxmox, système.
+DEFAULT_SCREENS = "monitoring,reseau,serveurs,proxmox,systeme"
+
+
 def make_screens(g):
     """g = module g19_dashboard (fournit ClockScreen, ChronoScreen, ... et wmo_info)."""
-    defs = [
-        ("HORLOGE", ClockNative(g.ClockScreen())),
-        ("CHRONO", ChronoNative(g.ChronoScreen())),
-        ("MONITORING", MonitorNative(g.MonitorScreen())),
-        ("RÉSEAU", NetworkNative(g.NetworkScreen())),
-        ("SERVEURS", ServersNative(g.ServersScreen())),
-        ("MÉTÉO", WeatherNative(g.WeatherScreen())),
-        ("SYSTÈME", StorageNative()),
-    ]
+    import os
+    factories = {
+        "horloge": lambda: ("HORLOGE", ClockNative(g.ClockScreen())),
+        "chrono": lambda: ("CHRONO", ChronoNative(g.ChronoScreen())),
+        "monitoring": lambda: ("MONITORING", MonitorNative(g.MonitorScreen())),
+        "reseau": lambda: ("RÉSEAU", NetworkNative(g.NetworkScreen())),
+        "serveurs": lambda: ("SERVEURS", ServersNative(g.ServersScreen())),
+        "meteo": lambda: ("MÉTÉO", WeatherNative(g.WeatherScreen())),
+        "proxmox": None,   # construit plus bas : n'existe que si l'API Proxmox est configurée (ou PVE_DEMO=1)
+        "systeme": lambda: ("SYSTÈME", StorageNative()),
+    }
+    order = ["horloge", "chrono", "monitoring", "reseau", "serveurs", "meteo", "proxmox", "systeme"]
+    want = os.environ.get("G19_SCREENS", DEFAULT_SCREENS).strip().lower()
+    names = order if want == "all" else [n.strip() for n in want.split(",") if n.strip()]
+
+    pve = None
+    if "proxmox" in names:
+        try:
+            import g19_proxmox
+            settings = g19_proxmox.load_settings(getattr(g, "CONFIG_FILE", None))
+            if settings.configured:
+                pve = g19_proxmox.ProxmoxClient(settings)
+            else:
+                print("[PVE] écran Proxmox ignoré : API non configurée (config.toml [proxmox] / PVE_*)")
+        except Exception as e:
+            print(f"[PVE] écran Proxmox désactivé : {e}")
+
+    defs = []
+    for n in names:
+        if n == "proxmox":
+            if pve is not None:
+                defs.append(("PROXMOX", ProxmoxNative(pve)))
+        elif n in factories:
+            defs.append(factories[n]())
+        else:
+            print(f"[HUD] écran inconnu dans G19_SCREENS : {n!r} (valides : {', '.join(order)})")
+    if not defs:
+        defs.append(("SYSTÈME", StorageNative()))
     for i, (_, s) in enumerate(defs):
         s.idx, s.n, s.g = i, len(defs), g
     return defs

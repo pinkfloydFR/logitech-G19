@@ -4,6 +4,7 @@
     python tools/render_screens.py [dossier_de_sortie]
 """
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -14,6 +15,8 @@ from PIL import Image, ImageDraw
 import g19_dashboard as g
 import g19_hud
 
+os.environ["PVE_DEMO"] = "1"  # écran Proxmox avec données de démonstration
+os.environ["G19_SCREENS"] = "all"  # tous les écrans, y compris ceux désactivés par défaut
 out = Path(sys.argv[1] if len(sys.argv) > 1 else "docs/screenshots")
 out.mkdir(parents=True, exist_ok=True)
 
@@ -22,6 +25,7 @@ tel = g.TelemetryHub(cfg_mgr)
 tel.running = False  # coupe les threads de collecte : on injecte des valeurs fictives
 time.sleep(1.5)
 screens = g19_hud.make_screens(g)
+time.sleep(1.5)  # le client Proxmox de démo génère ses premières données
 
 # --- données de démo ---
 g19_hud.socket.gethostname = lambda: "proxmox"

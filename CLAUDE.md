@@ -90,3 +90,10 @@ Protocole d'après libg19 (jgeboski), LCDHost, endlessmind/G19LCD ; valeurs d'or
 ## Dépôt GitHub
 https://github.com/pinkfloydFR/logitech-G19 (public, branche `main`). Origine : https://github.com/DPKoss/G15-Retro-HUD (remote `upstream` en local).
 `windows/tools/` contient une copie de Zadig 2.9 (GPLv3, SHA-256 dans son README) — `.exe` ajouté avec `git add -f` car `*.exe` est dans `.gitignore`.
+
+## Écrans, Proxmox et arrêt (ajouts récents)
+- `G19_SCREENS` (liste ordonnée, `all`) choisit les écrans ; défaut `monitoring,reseau,serveurs,proxmox,systeme` (horloge/chrono/météo retirés par choix de l'utilisateur, toujours disponibles). Le télémétrie météo/IP publique tourne quand même en arrière-plan (la météo est inutile si l'écran est absent : à désactiver si besoin).
+- Monitoring : la jauge GPU est remplacée par l'utilisation réseau (débit / vitesse du lien ; lien inconnu, ex. `vmbr0` → max(100 Mb/s, pic récent)).
+- Écran **Proxmox** (`g19_proxmox.py` + `ProxmoxNative`) : `GET /api2/json/cluster/resources` avec jeton `PVEAPIToken=...` (PVEAuditor), TLS non vérifié par défaut + épinglage `PVE_FINGERPRINT`, thread d'arrière-plan (`snapshot()` sans blocage), `PVE_DEMO=1` pour des données fictives. Testé uniquement contre un faux serveur HTTPS (`tests/test_proxmox.py`, 8 tests, Windows + Linux). `linux/proxmox-token.sh` **jamais exécuté sur un vrai Proxmox**.
+- Arrêt propre supplémentaire : `G19_STOPFILE=chemin` (créer le fichier arrête le HUD proprement, utile sous Windows sans signal) en plus de `G19_MAX_SECONDS`.
+- `tools/render_screens.py` : rend les écrans en PNG avec des données fictives (jamais de données réelles dans les captures publiées : ville, IP, nom d'hôte).
