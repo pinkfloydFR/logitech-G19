@@ -212,9 +212,9 @@ class DockerClient:
         spec = [  # nom, état, santé, texte, cpu_base, mem_Mo, limite_Mo
             ("nextcloud", "running", "healthy", "Up 12 days (healthy)", 6.0, 640, 2048),
             ("jellyfin", "running", "healthy", "Up 3 days (healthy)", 18.0, 1450, 4096),
-            ("sonarr", "running", "", "Up 3 days", 1.5, 310, 1024),
-            ("radarr", "running", "unhealthy", "Up 2 hours (unhealthy)", 2.2, 280, 1024),
-            ("play-tp", "restarting", "", "Restarting (1) 5 seconds ago", 0.0, 0, 0),
+            ("grafana", "running", "", "Up 3 days", 1.5, 310, 1024),
+            ("paperless", "running", "unhealthy", "Up 2 hours (unhealthy)", 2.2, 280, 1024),
+            ("web-app", "restarting", "", "Restarting (1) 5 seconds ago", 0.0, 0, 0),
             ("backup-job", "exited", "", "Exited (0) 8 hours ago", 0.0, 0, 0),
         ]
         out = []

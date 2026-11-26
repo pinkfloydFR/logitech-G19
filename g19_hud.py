@@ -293,6 +293,9 @@ class NativeScreen:
     def is_immersive(self):
         return False
 
+    def wanted_fps(self):
+        return 0  # 0 = cadence par défaut de l'application (G19_FPS)
+
     def bypass_wake_for_button(self, btn):
         return False
 
@@ -357,6 +360,10 @@ class ClockNative(NativeScreen):
 class ChronoNative(NativeScreen):
     TITLE, ACCENT = "CHRONO", VIOLET
 
+    def wanted_fps(self):  # dixièmes lisibles et alerte clignotante régulière
+        lg = self.logic
+        return 10 if lg.running or (lg.is_timer and lg.remaining == 0.0) else 0
+
     def labels(self):
         lg = self.logic
         return ["PAUSE" if lg.running else "START", "DURÉE" if lg.is_timer else "TOUR", "RESET", "MODE"]
@@ -389,6 +396,7 @@ class ChronoNative(NativeScreen):
 
 class MonitorNative(NativeScreen):
     TITLE, ACCENT = "MONITORING", GREEN
+    history = None  # MetricsHistory, attaché par make_screens
 
     def labels(self):
         lg = self.logic
@@ -441,15 +449,48 @@ class MonitorNative(NativeScreen):
         self._gauge(d, 34, "CPU", tel.cpu_total, f"{temp:.0f}°C" if temp is not None else f"{len(tel.cpu_cores)} thr",
                     load_color(tel.cpu_total), tel.cpu_peak if peaks else None)
         self._gauge(d, 74, "RAM", tel.ram_pct, f"{tel.ram_used_gb:.1f} Go", load_color(tel.ram_pct))
-        # Débits ▼ descendant / ▲ montant : deux courbes sur la même échelle (comme l'écran Réseau)
-        dl, ul = list(tel.dl_hist), list(tel.ul_hist)
-        peak = max(10240.0, max(dl, default=1.0), max(ul, default=1.0))
-        for y0, vals, color, arrow, cur in ((116, dl, CYAN, "▼", tel.dl_speed), (164, ul, MAGENTA, "▲", tel.ul_speed)):
-            area(d, (10, y0, W - 10, y0 + 44), vals, peak, color)
-            lab = f"{arrow} {fmt_rate(cur)}"
-            d.rounded_rectangle((14, y0 + 2, 18 + twidth(d, lab, F(12, True)) + 6, y0 + 15), radius=4, fill=PANEL)
-            text(d, (17, y0 + 8), lab, F(12, True), color, "lm")
-            text(d, (W - 16, y0 + 8), f"pic {fmt_rate(peak)}", F(9), MUTED, "rm")
+        self._history(d, 114, "CPU", 1, load_color(tel.cpu_total), peaks)
+        self._history(d, 162, "RAM", 3, BLUE, peaks)
+
+    def _history(self, d, y0, label, col, color, peaks):
+        """Courbe sur 6 h (moyenne par tranche) ; les trous = HUD arrêté. col : 1 = CPU, 3 = RAM."""
+        import g19_history as gh
+        x0, x1, h = 10, W - 10, 46
+        d.rectangle((x0, y0, x1, y0 + h), fill=PANEL)
+        for hour in range(1, 6):  # repère vertical chaque heure
+            gx = x1 - (x1 - x0) * hour // 6
+            d.line((gx, y0, gx, y0 + h), fill=PANEL2)
+        pts = self.history.points() if self.history is not None else []
+        now_idx = int(time.time() // gh.BUCKET_SEC)
+
+        def xy(p, value):
+            x = x1 - (now_idx - p[0]) * (x1 - x0) / (gh.BUCKETS - 1)
+            return (x, y0 + h - int(min(100.0, value) / 100.0 * (h - 1)))
+
+        runs, run = [], []
+        for p in pts:
+            if run and p[0] - run[-1][0] > 1:
+                runs.append(run)
+                run = []
+            run.append(p)
+        if run:
+            runs.append(run)
+        for r in runs:
+            line = [xy(p, p[col]) for p in r]
+            if len(line) == 1:
+                line = [(line[0][0] - 1, line[0][1]), line[0]]
+            d.polygon(line + [(line[-1][0], y0 + h), (line[0][0], y0 + h)], fill=mix(PANEL, color, 0.35))
+            d.line(line, fill=color, width=2)
+            if peaks and len(r) > 1:
+                d.line([xy(p, p[col + 1]) for p in r], fill=TEXT, width=1)
+        lab = f"{label} · 6 h"
+        d.rounded_rectangle((14, y0 + 2, 20 + twidth(d, lab, F(11, True)), y0 + 16), radius=4, fill=PANEL)
+        text(d, (17, y0 + 9), lab, F(11, True), color, "lm")
+        if pts:
+            avg = sum(p[col] for p in pts) / len(pts)
+            info = f"moy {avg:.0f}% · max {max(p[col + 1] for p in pts):.0f}%"
+            d.rounded_rectangle((W - 22 - twidth(d, info, F(9)), y0 + 3, W - 14, y0 + 15), radius=4, fill=PANEL)
+            text(d, (W - 18, y0 + 9), info, F(9), TEXT, "rm")
 
 
 class NetworkNative(NativeScreen):
@@ -471,17 +512,33 @@ class NetworkNative(NativeScreen):
         if not lg.frozen:
             lg.snap_dl = list(tel.dl_hist)
             lg.snap_ul = list(tel.ul_hist)
-        card(d, (10, 34, 156, 84))
-        text(d, (20, 46), "▼ RÉCEPTION", F(11, True), CYAN, "lm")
-        text(d, (20, 68), lg._fmt_rate(tel.dl_speed) + "/s", F(20, True), TEXT, "lm")
-        card(d, (164, 34, W - 10, 84))
-        text(d, (174, 46), "▲ ENVOI", F(11, True), MAGENTA, "lm")
-        text(d, (174, 68), lg._fmt_rate(tel.ul_speed) + "/s", F(20, True), TEXT, "lm")
+        # --- adresses : interne (carte active) et externe (publique) ---
+        self._ip_card(d, (10, 32, 157, 76), "IP INTERNE", tel.local_ip, GREEN)
+        self._ip_card(d, (163, 32, W - 10, 76), "IP EXTERNE", tel.public_ip, CYAN)
+        if tel.vpn_active:
+            d.rounded_rectangle((W - 46, 36, W - 16, 48), radius=4, fill=AMBER)
+            text(d, (W - 31, 42), "VPN", F(9, True), BG, "mm")
+        # --- courbes ▼ / ▲ sur la même échelle ---
         peak = max(10240.0, max(lg.snap_dl, default=1.0), max(lg.snap_ul, default=1.0))
-        area(d, (10, 92, W - 10, 148), lg.snap_dl, peak, CYAN)
-        area(d, (10, 152, W - 10, 208), lg.snap_ul, peak, MAGENTA)
-        text(d, (16, 98), "pic " + lg._fmt_rate(peak), F(10), MUTED, "lm")
-        text(d, (W - 16, 198), f"Total ▼ {tel.dl_total_gb:.2f} Go   ▲ {tel.ul_total_bytes / 1024 ** 3:.2f} Go", F(10), TEXT, "rm")
+        rows = ((82, lg.snap_dl, CYAN, "▼", tel.dl_speed, tel.dl_total_bytes),
+                (147, lg.snap_ul, MAGENTA, "▲", tel.ul_speed, tel.ul_total_bytes))
+        for y0, vals, color, arrow, cur, total in rows:
+            area(d, (10, y0, W - 10, y0 + 62), vals, peak, color)
+            lab = f"{arrow} {lg._fmt_rate(cur)}/s"
+            d.rounded_rectangle((14, y0 + 3, 24 + twidth(d, lab, F(14, True)), y0 + 21), radius=4, fill=PANEL)
+            text(d, (19, y0 + 12), lab, F(14, True), color, "lm")
+            info = f"total {total / 1024 ** 3:.2f} Go · pic {lg._fmt_rate(peak)}/s"
+            d.rounded_rectangle((W - 22 - twidth(d, info, F(9)), y0 + 5, W - 14, y0 + 18), radius=4, fill=PANEL)
+            text(d, (W - 18, y0 + 12), info, F(9), TEXT, "rm")
+
+    @staticmethod
+    def _ip_card(d, box, title, ip, color):
+        x0, y0, x1, y1 = box
+        card(d, box)
+        text(d, (x0 + 10, y0 + 11), title, F(10, True), MUTED, "lm")
+        # réduit la police pour les adresses longues (IPv6) avant de tronquer
+        font = next((f for f in (F(15, True), F(12, True), F(10, True)) if twidth(d, ip, f) <= x1 - x0 - 18), F(9, True))
+        text(d, (x0 + 10, y0 + 30), fit(d, ip, font, x1 - x0 - 18), font, color, "lm")
 
 
 class ServersNative(NativeScreen):
@@ -832,12 +889,13 @@ class DockerNative(NativeScreen):
 
 
 # Écrans disponibles (nom court -> libellé). Sélection : variable G19_SCREENS (liste séparée par des virgules,
-# dans l'ordre voulu) ; « all » = tous. Par défaut : monitoring, serveurs, proxmox, docker.
-DEFAULT_SCREENS = "monitoring,serveurs,proxmox,docker"
+# dans l'ordre voulu) ; « all » = tous. Par défaut : monitoring, réseau, serveurs, proxmox, docker.
+DEFAULT_SCREENS = "monitoring,reseau,serveurs,proxmox,docker"
 
 
-def make_screens(g):
-    """g = module g19_dashboard (fournit ClockScreen, ChronoScreen, ... et wmo_info)."""
+def make_screens(g, tel=None):
+    """g = module g19_dashboard (fournit ClockScreen, ChronoScreen, ... et wmo_info).
+    tel = TelemetryHub : si fourni, l'historique CPU/RAM du Monitoring est enregistré."""
     import os
     factories = {
         "horloge": lambda: ("HORLOGE", ClockNative(g.ClockScreen())),
@@ -880,6 +938,7 @@ def make_screens(g):
 
     defs = []
     for n in names:
+        before = len(defs)
         if n == "proxmox":
             if pve is not None:
                 defs.append(("PROXMOX", ProxmoxNative(pve)))
@@ -890,8 +949,16 @@ def make_screens(g):
             defs.append(factories[n]())
         else:
             print(f"[HUD] écran inconnu dans G19_SCREENS : {n!r} (valides : {', '.join(order)})")
+        if len(defs) > before:
+            defs[-1][1].key = n  # nom court, utilisé par les touches G (G19_GMAP)
     if not defs:
         defs.append(("SYSTÈME", StorageNative()))
+        defs[-1][1].key = "systeme"
+    for _, scr in defs:
+        if isinstance(scr, MonitorNative) and tel is not None:
+            import g19_history
+            base = Path(getattr(g, "CONFIG_FILE", "config.toml")).parent
+            scr.history = g19_history.MetricsHistory(base / "history.json").start(lambda: (tel.cpu_total, tel.ram_pct))
     for i, (_, s) in enumerate(defs):
         s.idx, s.n, s.g = i, len(defs), g
     return defs

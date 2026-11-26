@@ -1237,19 +1237,25 @@ class TelemetryHub:
         geo_lat = None
         geo_lon = None
 
+        wan_ip = ""
         try:
             info = self._http_json("https://ipwho.is/", timeout=4.0)
             if info.get("success", False):
-                self.public_ip = str(info.get("ip", self.public_ip))
+                wan_ip = str(info.get("ip") or "")
                 geo_city = str(info.get("city") or "").strip()
                 geo_lat = float(info["latitude"])
                 geo_lon = float(info["longitude"])
         except Exception:
+            pass
+        # IPv4 de préférence : api.ipify.org n'est joignable qu'en IPv4 ; l'IPv6 reste le repli si elle échoue.
+        if not wan_ip or ":" in wan_ip:
             try:
                 ip_only = self._http_json("https://api.ipify.org?format=json", timeout=3.5)
-                self.public_ip = str(ip_only.get("ip", self.public_ip))
+                wan_ip = str(ip_only.get("ip") or wan_ip)
             except Exception:
                 pass
+        if wan_ip:
+            self.public_ip = wan_ip
 
         # Si VPN actif (et option activée) ou géo-IP indisponible -> Repli sur Lausanne 1000
         if (cfg.fallback_on_vpn and self.vpn_active) or not cfg.auto_detect_ip or not geo_city or geo_lat is None:
@@ -2848,6 +2854,8 @@ G19_DEFAULT_KEYMAP = {
 class G19Controller:
     """Remplace G15HidController : mêmes attributs/méthodes publics, rendu 160x43 -> 320x240 RGB565."""
 
+    KEEPALIVE_SEC = 5.0  # une image identique est tout de même renvoyée à cet intervalle
+
     def __init__(self, cfg_mgr: ConfigManager):
         self.cfg_mgr = cfg_mgr
         self.running = True
@@ -2871,6 +2879,8 @@ class G19Controller:
         # G19_UI=native (défaut) : interface couleur 320x240 ; G19_UI=retro : rendu G15 160x43 agrandi
         self.native = os.environ.get("G19_UI", "native").lower() != "retro"
         self._bits = self._load_keymap()
+        self._last_raw: Optional[bytes] = None  # dernière image réellement envoyée (évite les renvois inutiles)
+        self._last_sent = 0.0
 
         self._try_connect(initial=True)
         threading.Thread(target=self._reader_loop, daemon=True).start()
@@ -2925,13 +2935,13 @@ class G19Controller:
                 self.applet_press_time = None
             self.pressed_set = now_pressed
 
-    # Touches G1..G12 -> saut direct à l'écran n ; M1 = précédent, M2 = suivant, MR = écran on/off
+    # Touches G1..G12 -> raccourcis d'écran (voir G19_GMAP) ; M1 = précédent, M2 = suivant, MR = écran on/off
     def _handle_gkeys(self, mask: int):
         newly = mask & ~getattr(self, "_gm_prev", 0)
         self._gm_prev = mask
         for i in range(12):
             if newly & (1 << i):
-                self.event_queue.put(f"GOTO:{i}")
+                self.event_queue.put(f"GKEY:{i + 1}")
         if newly & (1 << 12):
             self.event_queue.put("PREV_PAGE")
         if newly & (1 << 13):
@@ -2980,6 +2990,7 @@ class G19Controller:
                 self.dev.set_backlight(*self.backlight)
                 self.dev.set_brightness(int(os.environ.get("G19_BRIGHTNESS", "100")))
                 self.dev.set_mkeys(m1=True)
+                self._last_raw = None  # après (re)connexion, l'image doit être renvoyée
                 self.connected = True
                 print("[G19] Logitech G19 connecté et opérationnel.")
                 return True
@@ -3035,8 +3046,13 @@ class G19Controller:
                 self._last_reconnect_t = now
                 self._try_connect(initial=False)
             return
+        raw = img.tobytes()
+        now = time.monotonic()
+        if raw == self._last_raw and now - self._last_sent < self.KEEPALIVE_SEC:
+            return  # image inchangée : ni encodage ni transfert USB
         try:
             self.dev.send_frame(self._encode_frame(img))
+            self._last_raw, self._last_sent = raw, now
         except (usb.core.USBError, OSError, ValueError) as e:
             if self._debug:
                 print(f"[G19] erreur envoi trame : {e!r}")
@@ -3086,6 +3102,23 @@ def _g19_present() -> bool:
 # ==============================================================================
 # APPLICATION PRINCIPALE (8 ÉCRANS, MASQUAGE AUTO 3s & SYSTEM TRAY)
 # ==============================================================================
+# Touches G -> écrans (UI native). Disposition du G19 : G1/G7 sur la 1re rangée, G2/G8 sur la 2e, G3/G9 sur la 3e.
+DEFAULT_GMAP = "G1=reseau,G7=serveurs,G2=proxmox,G8=docker,G3=monitoring"
+
+
+def parse_gkey_map(text: str) -> dict[int, str]:
+    """« G1=reseau,G3=monitoring » -> {1: 'reseau', 3: 'monitoring'} ; les entrées invalides sont ignorées."""
+    out = {}
+    for item in text.split(","):
+        key, _, screen = item.partition("=")
+        key, screen = key.strip().upper(), screen.strip().lower()
+        if key.startswith("G") and key[1:].isdigit() and 1 <= int(key[1:]) <= 12 and screen:
+            out[int(key[1:])] = screen
+        elif item.strip():
+            print(f"[HUD] G19_GMAP : entrée ignorée {item.strip()!r} (attendu « G1=reseau »)")
+    return out
+
+
 class HudApp:
     def __init__(self):
         self.cfg_mgr = ConfigManager(CONFIG_FILE)
@@ -3094,10 +3127,15 @@ class HudApp:
         self.audio = AudioLoopbackWorker()
 
         self.native = bool(getattr(self.hw, "native", False))
+        try:  # interface native : les mesures changent ~1 fois/s, 5 images/s suffisent
+            self.native_fps = min(30.0, max(1.0, float(os.environ.get("G19_FPS", "5"))))
+        except ValueError:
+            self.native_fps = 5.0
+        self.gkey_map = parse_gkey_map(os.environ.get("G19_GMAP", DEFAULT_GMAP))
         if self.native:
             import g19_hud
             self.g19_hud = g19_hud
-            self.screens = g19_hud.make_screens(sys.modules[__name__])
+            self.screens = g19_hud.make_screens(sys.modules[__name__], self.telemetry)
         else:
             self.screens: list[tuple[str, BaseScreen]] = [
                 ("HORLOGE", ClockScreen()),
@@ -3150,9 +3188,9 @@ class HudApp:
                 elif ev == "NEXT_PAGE":
                     self.next_page()
                     page_name, screen = self.screens[self.page_idx]
-                elif isinstance(ev, str) and ev.startswith("GOTO:"):
-                    n = int(ev[5:])
-                    if 0 <= n < len(self.screens) and n != self.page_idx:
+                elif isinstance(ev, str) and ev.startswith("GKEY:"):
+                    n = self._gkey_target(int(ev[5:]))
+                    if n is not None and n != self.page_idx:
                         self.page_idx = (n - 1) % len(self.screens)
                         self.next_page()
                         page_name, screen = self.screens[self.page_idx]
@@ -3187,9 +3225,7 @@ class HudApp:
                     elif now < self.toast_until:
                         self.g19_hud.toast(draw, self.toast_msg)
                 self.hw.send_image(img)
-                elapsed = time.monotonic() - t0
-                if elapsed < frame_dt:
-                    time.sleep(frame_dt - elapsed)
+                self._wait_next_frame(t0, max(self.native_fps, screen.wanted_fps()))
                 continue
 
             img = Image.new("1", (LCD_W, LCD_H), 1)
@@ -3218,6 +3254,22 @@ class HudApp:
         self.audio.close()
         self.telemetry.close()
         self.hw.close()
+
+    def _gkey_target(self, num: int) -> Optional[int]:
+        """Index de l'écran visé par la touche Gnum, ou None (touche libre / écran absent)."""
+        if not self.native:  # mode retro : Gn = n-ième écran
+            return num - 1 if 1 <= num <= len(self.screens) else None
+        key = self.gkey_map.get(num)
+        return next((i for i, (_, s) in enumerate(self.screens) if getattr(s, "key", None) == key), None) if key else None
+
+    def _wait_next_frame(self, t0: float, fps: float):
+        """Attend l'image suivante, mais rend la main dès qu'une touche est pressée (réaction immédiate)."""
+        deadline = t0 + 1.0 / fps
+        while self.running and self.hw.event_queue.empty():
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            time.sleep(min(0.02, left))
 
     def stop(self, icon=None, item=None):
         self.running = False

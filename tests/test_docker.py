@@ -19,7 +19,7 @@ import g19_docker as dk
 
 LIST = [
     {"Names": ["/nextcloud"], "State": "running", "Status": "Up 3 days (healthy)", "Image": "nextcloud"},
-    {"Names": ["/radarr"], "State": "running", "Status": "Up 2 hours (unhealthy)", "Image": "radarr"},
+    {"Names": ["/paperless"], "State": "running", "Status": "Up 2 hours (unhealthy)", "Image": "paperless"},
     {"Names": ["/web"], "State": "restarting", "Status": "Restarting (1) 5 seconds ago", "Image": "nginx"},
     {"Names": ["/job"], "State": "exited", "Status": "Exited (0) 8 hours ago", "Image": "alpine"},
 ]
@@ -92,14 +92,14 @@ class TcpClientTest(unittest.TestCase):
 
     def test_all_containers_sorted_with_stats(self):
         cs = self.fetch([])
-        self.assertEqual([c.name for c in cs], ["job", "nextcloud", "radarr", "web"])
+        self.assertEqual([c.name for c in cs], ["job", "nextcloud", "paperless", "web"])
         nc = next(c for c in cs if c.name == "nextcloud")
         self.assertAlmostEqual(nc.cpu_pct, 40.0)
         self.assertIsNone(next(c for c in cs if c.name == "job").cpu_pct)   # arrêté : pas de stats
 
     def test_watched_list_keeps_order_and_reports_missing(self):
-        cs = self.fetch(["radarr", "ghost", "nextcloud"])
-        self.assertEqual([(c.name, c.state) for c in cs], [("radarr", "running"), ("ghost", "missing"), ("nextcloud", "running")])
+        cs = self.fetch(["paperless", "ghost", "nextcloud"])
+        self.assertEqual([(c.name, c.state) for c in cs], [("paperless", "running"), ("ghost", "missing"), ("nextcloud", "running")])
 
     def test_background_loop(self):
         c = dk.DockerClient(dk.Settings(host=self.host, interval_sec=2))

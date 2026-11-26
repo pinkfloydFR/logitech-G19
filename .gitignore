@@ -23,3 +23,5 @@ Thumbs.db
 g19_keymap.json
 live.log
 .venv-win/
+history.json
+history.tmp

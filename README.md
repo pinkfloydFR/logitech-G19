@@ -3,7 +3,7 @@
 Un tableau de bord pour l'**écran LCD couleur 320×240** et les touches du **Logitech G19**, sans pilote Logitech
 (ni LGS, ni G HUB) : le G19 est piloté directement en USB avec Python.
 
-Monitoring, pings, **VM Proxmox**, **conteneurs Docker** (et réseau, système, horloge, chrono, météo en option) — avec les touches LCD, G1–G12 et M1–M3
+Monitoring, réseau, pings, **VM Proxmox**, **conteneurs Docker** (et système, horloge, chrono, météo en option) — avec les touches LCD, G1–G12 et M1–M3
 du clavier pour naviguer. Pensé pour un G19 branché sur un **serveur Linux / Proxmox** (service systemd), et utilisable sous **Windows**.
 
 ![Les 7 écrans](docs/screenshots/overview.png)
@@ -16,17 +16,28 @@ Affichés par défaut (dans cet ordre) :
 
 | Écran | Contenu | Boutons ▲ ▼ ◀ ▶ |
 |---|---|---|
-| **Monitoring** | jauges CPU / RAM, température, load, deux courbes de débit ▼ descendant / ▲ montant, vue par cœur | vue · cœurs · — · pics |
+| **Monitoring** | jauges CPU / RAM, température, load, **historique CPU et RAM sur 6 h** (moyenne, max, conservé au redémarrage), vue par cœur | vue · cœurs · — · pics |
+| **Réseau** | **IP interne et externe** (IPv4 de préférence, badge VPN), deux courbes ▼ / ▲ avec totaux et pic | pause · Mb/Ko · RAZ |
 | **Serveurs** | pings des hôtes configurés, IP locale/publique, VPN | IP · … · ping |
 | **Proxmox** | nœud (CPU/RAM) + liste des **VM et conteneurs LXC** (état, CPU, RAM), via l'API Proxmox en lecture seule | haut · bas · tous/actifs · tri |
 | **Docker** | conteneurs **surveillés** (ou tous) : état, santé, CPU, mémoire, compteur de problèmes | haut · bas · alertes/tous |
 
-Disponibles sur demande : **Réseau** (débits détaillés), **Système** (volumes, load, température, swap), **Horloge**,
+Disponibles sur demande : **Système** (volumes, load, température, swap), **Horloge**,
 **Chrono** (chronomètre / minuteur) et **Météo** (Open-Meteo, 6 jours + courbe 24 h).
 Choix et ordre avec `G19_SCREENS` (ex. `G19_SCREENS=horloge,monitoring,proxmox,docker`, ou `all`).
 
 Navigation : **Menu / OK** = écran suivant · **Retour** = précédent · **Home** (carré) = écran on/off ·
-**G1…G12** = saut direct à l'écran n · **M1 / M2** = précédent / suivant · **MR** = écran on/off.
+**M1 / M2** = précédent / suivant · **MR** = écran on/off.
+
+Raccourcis directs (modifiables avec `G19_GMAP`) :
+
+| Rangée | Touche | Écran | Touche | Écran |
+|---|---|---|---|---|
+| 1 | **G1** | Réseau | **G7** | Serveurs |
+| 2 | **G2** | Proxmox | **G8** | Docker |
+| 3 | **G3** | Monitoring (écran par défaut) | | |
+
+*(Sous Windows, les touches G demandent une étape de pilote supplémentaire : voir [`windows/README.md`](windows/README.md).)*
 
 ### Écran Proxmox
 
@@ -85,8 +96,10 @@ Variables d'environnement (service Linux : `/etc/default/g19-hud`) :
 
 | Variable | Défaut | Rôle |
 |---|---|---|
+| `G19_GMAP` | `G1=reseau,G7=serveurs,G2=proxmox,G8=docker,G3=monitoring` | écran ouvert par chaque touche G (noms de `G19_SCREENS`) |
+| `G19_FPS` | `5` | images/s de l'interface native (1–30) ; une image inchangée n'est pas renvoyée, un appui sur une touche rafraîchit aussitôt |
 | `G19_BRIGHTNESS` | `100` | luminosité de l'écran, 0–100 |
-| `G19_SCREENS` | `monitoring,serveurs,proxmox,docker` | écrans affichés et leur ordre (`reseau`, `systeme`, `horloge`, `chrono`, `meteo` aussi ; `all` = tous) |
+| `G19_SCREENS` | `monitoring,reseau,serveurs,proxmox,docker` | écrans affichés et leur ordre (`systeme`, `horloge`, `chrono`, `meteo` aussi ; `all` = tous) |
 | `G19_UI` | `native` | `native` = interface couleur ; `retro` = rendu monochrome 160×43 agrandi |
 | `G19_THEME` | `amber` | thème du mode `retro` : `amber`, `blue`, `green`, `white`, `amber-dark`, `matrix` |
 | `G19_BACKEND` | `auto` | `g19`, ou `g15` pour le G15 d'origine |
@@ -110,6 +123,7 @@ l'envoi), et les touches arrivent sur deux endpoints interrupt. Le protocole com
 | `g19_hud.py` | interface couleur native 320×240 |
 | `g19_proxmox.py` | client de l'API Proxmox (lecture seule) |
 | `g19_docker.py` | client de l'API Docker (lecture seule) |
+| `g19_history.py` | historique CPU/RAM 6 h (`history.json`) |
 | `g19_dashboard.py` | application : télémétrie, boutons, boucle de rendu, backends |
 | `tools/render_screens.py` | rend les écrans en PNG sans matériel |
 | `linux/`, `windows/` | installation par système |

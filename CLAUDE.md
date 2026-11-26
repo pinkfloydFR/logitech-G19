@@ -39,7 +39,7 @@ Périphérique **`046d:c229`** (« Display interface » / « Macro Interface »)
 ## Mapping des touches dans le HUD
 - Menu / OK = écran suivant (appui long > 0,9 s = écran off) ; Retour = écran précédent ; Home (carré) = écran off/on.
 - Haut / Bas / Gauche / Droite = boutons 1-4 (légendes `▲ ▼ ◀ ▶` dans la barre du bas ; Haut/Bas = Pong sur l'écran retro).
-- G1..G7 = saut direct à l'écran n ; M1 = précédent ; M2 = suivant ; MR = écran off/on.
+- Touches G (UI native) via `G19_GMAP` (par nom d'écran, indépendant de l'ordre) : défaut `G1=reseau,G7=serveurs,G2=proxmox,G8=docker,G3=monitoring` ; mode retro : Gn = n-ième écran. M1 = précédent ; M2 = suivant ; MR = écran off/on.
 - Remap des touches LCD : `g19_keymap.json` (`{"UP": "1", "MENU": "0", "CANCEL": "PREV_PAGE"}`).
 
 ## Pièges (apprentissages)
@@ -100,3 +100,11 @@ https://github.com/pinkfloydFR/logitech-G19 (public, branche `main`). Origine : 
 - **Défaut des écrans** : `monitoring,serveurs,proxmox,docker` (Réseau et Système retirés des défauts à la demande de l'utilisateur ; toujours disponibles). Monitoring = jauges CPU/RAM + 2 courbes (▼ bleu / ▲ rose, même échelle).
 - Écran **Docker** (`g19_docker.py` + `DockerNative`) : API Engine en lecture seule (`/containers/json?all=1` + `/containers/{n}/stats?stream=false`), socket Unix ou TCP, liste de conteneurs surveillés (`[docker] containers`, `G19_DOCKER_CONTAINERS`), `DOCKER_DEMO=1`. ⚠️ socket Docker = root : privilégier docker-socket-proxy. Testé contre un faux démon (`tests/test_docker.py`, TCP + socket Unix sous Linux), jamais contre un vrai Docker.
 - Piège arrêt : `threading.Timer(G19_MAX_SECONDS)` doit être `daemon=True`, sinon le processus survit à un arrêt propre (écran noir mais process vivant).
+
+## Cadence d'affichage (UI native)
+- `G19_FPS` (défaut 5, borné 1–30) ; `config.toml:fps` ne concerne plus que le mode retro. Un écran peut demander plus via `wanted_fps()` (Chrono en marche : 10).
+- `G19Controller.send_image` n'encode/n'envoie pas une image identique à la précédente (renvoi forcé toutes les `KEEPALIVE_SEC` = 5 s et après reconnexion). `_wait_next_frame` rend la main dès qu'une touche arrive.
+- Piège de mesure : sous Windows le 1er `psutil.getloadavg()` coûte ~0,5 s ; toujours faire un rendu à blanc avant de chronométrer.
+- **Écran Réseau remis dans les défauts** (demande de l'utilisateur, remplace le retrait ci-dessus) : défaut `monitoring,reseau,serveurs,proxmox,docker` ; cartes IP interne / externe (badge VPN) + 2 courbes.
+- Monitoring : les courbes réseau sont remplacées par l'**historique CPU et RAM sur 6 h** (`g19_history.py` : 300 tranches de 72 s, moy + max, `history.json` à côté de `config.toml`, sauvé à chaque tranche ; `PICS` trace le max). Enregistré même quand un autre écran est affiché ; trous = HUD arrêté.
+- IP externe : IPv4 de préférence (`api.ipify.org` si `ipwho.is` renvoie de l'IPv6), IPv6 en repli.

@@ -51,6 +51,17 @@ far = time.monotonic() + 1e9
 g19_hud._cache["disks"] = (far, [("/", 212.0, 480.0, 44.0), ("/mnt/data", 3100.0, 8000.0, 39.0), ("/var/lib/vz", 640.0, 1000.0, 64.0)])
 g19_hud._cache["temp"] = (far, 58.0)
 g19_hud._cache["load"] = (far, (0.82, 0.74, 0.61))
+import g19_history
+hist, now = g19_history.MetricsHistory(None), time.time()
+for k in range(g19_history.BUCKETS):  # 6 h fictives, avec une coupure du HUD vers -4 h
+    if 80 <= k < 95:
+        continue
+    t = now - (g19_history.BUCKETS - 1 - k) * g19_history.BUCKET_SEC
+    base = 28 + 16 * math.sin(k / 31) + 7 * math.sin(k / 5)
+    hist.add(base + (40 if k % 67 == 0 else 0), 41 + 8 * math.sin(k / 55) + k / 40, now=t)
+for _, scr in screens:
+    if isinstance(scr, g19_hud.MonitorNative):
+        scr.history = hist
 
 for i, (name, scr) in enumerate(screens):
     img = Image.new("RGB", (320, 240))
